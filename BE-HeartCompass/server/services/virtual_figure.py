@@ -1,7 +1,7 @@
 from database.database import session
 from database.models import RelationChain
-from agent.graph.ContextGraph import getContextGraph
-from agent.graph.state import (
+from agent.graph.ContextGraph.graph import getContextGraph
+from agent.graph.ContextGraph.state import (
     ContextGraphState,
     initContextGraphState,
 )
