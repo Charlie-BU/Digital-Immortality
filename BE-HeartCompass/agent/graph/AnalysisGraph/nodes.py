@@ -1,28 +1,19 @@
 from langchain_openai import ChatOpenAI
-from langgraph.graph import StateGraph, END
-from langgraph.graph.state import CompiledStateGraph
 from langchain_core.messages import SystemMessage, HumanMessage
 import json
-import asyncio
 import logging
 import os
 
 from .state import (
-    AnalysisGraphInput,
     LLMOutput,
     Request,
     AnalysisGraphOutput,
     AnalysisGraphState,
 )
-from ..llm import prepareLLM
-from ..prompt import getPrompt
+from ...llm import prepareLLM
+from ...prompt import getPrompt
 
 logger = logging.getLogger(__name__)
-
-
-# 全局单例
-_analysis_graph_instance: CompiledStateGraph | None = None
-_analysis_graph_lock = asyncio.Lock()
 
 
 async def stepFetchPromptFromScreenshots(request: Request) -> str:
@@ -55,7 +46,7 @@ async def stepCallLLM(
     final_prompt: str,
 ) -> LLMOutput:
     llm: ChatOpenAI = prepareLLM(model="DOUBAO_2_0_LITE")
-    
+
     msg = [{"type": "text", "text": final_prompt}]
     # 聊天记录分析才会有图片
     screenshot_urls = request.get("conversation_screenshots")
@@ -116,24 +107,3 @@ async def node(state: AnalysisGraphState) -> AnalysisGraphOutput:
     return {
         "llm_output": llm_output,
     }
-
-
-async def getAnalysisGraph() -> CompiledStateGraph:
-    global _analysis_graph_instance
-    if _analysis_graph_instance is not None:
-        return _analysis_graph_instance
-    async with _analysis_graph_lock:
-        if _analysis_graph_instance is not None:
-            return _analysis_graph_instance
-
-        graph = StateGraph(
-            state_schema=AnalysisGraphState,
-            input_schema=AnalysisGraphInput,
-            output_schema=AnalysisGraphOutput,
-        )
-        graph.add_node("node", node)
-        graph.set_entry_point("node")
-        graph.add_edge("node", END)
-
-        _analysis_graph_instance = graph.compile()
-        return _analysis_graph_instance

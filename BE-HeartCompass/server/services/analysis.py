@@ -1,12 +1,11 @@
 from typing import List
 
-from agent.graph.ContextGraph import getContextGraph
-from agent.graph.AnalysisGraph import getAnalysisGraph
-from agent.graph.state import (
+from agent.graph.ContextGraph.graph import getContextGraph
+from agent.graph.ContextGraph.state import ContextGraphState, initContextGraphState
+from agent.graph.AnalysisGraph.graph import getAnalysisGraph
+from agent.graph.AnalysisGraph.state import (
     AnalysisGraphInput,
     AnalysisGraphOutput,
-    ContextGraphState,
-    initContextGraphState,
 )
 from database.database import session
 from database.models import RelationChain, Analysis

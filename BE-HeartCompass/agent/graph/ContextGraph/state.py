@@ -51,31 +51,9 @@ class AllContext(TypedDict):
     ]  # 单独引入InteractionSignal，不走召回链路
 
 
-class LLMOutput(TypedDict):
-    message_candidates: List[str]  # 下一步消息候选
-    risks: List[str]  # 风险提示
-    suggestions: List[str]  # 下一步推进话题或行动建议
-    message: str | None  # 错误消息
-
-
 class ContextGraphState(TypedDict):
     request: Request
     context_block: str  # 关系与画像上下文
-
-
-class AnalysisGraphInput(TypedDict):
-    request: Request
-    context_block: str  # 关系与画像上下文
-
-
-class AnalysisGraphState(TypedDict):
-    request: Request
-    context_block: str  # 关系与画像上下文
-    llm_output: LLMOutput
-
-
-class AnalysisGraphOutput(TypedDict):
-    llm_output: LLMOutput
 
 
 def initContextGraphState(request: Request) -> ContextGraphState:
