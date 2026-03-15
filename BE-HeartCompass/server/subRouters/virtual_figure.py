@@ -11,8 +11,8 @@ from ..services.user import userGetUserIdByAccessToken
 from ..services.virtual_figure import vfRecalculateContextBlock
 from database.database import session
 from database.models import RelationChain
-from agent.graph.VirtualFigure.graph import getVirtualFigureGraph
-from agent.graph.VirtualFigure.state import (
+from agent.graph.VirtualFigureGraph.graph import getVirtualFigureGraph
+from agent.graph.VirtualFigureGraph.state import (
     VirtualFigureGraphOutput,
     initVirtualFigureGraphState,
 )
