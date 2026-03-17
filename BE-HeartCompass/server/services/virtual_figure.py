@@ -2,13 +2,13 @@ from database.database import session
 from database.models import RelationChain
 from agent.graph.ContextGraph.graph import getContextGraph
 from agent.graph.ContextGraph.state import (
-    ContextGraphState,
+    ContextGraphOutput,
     initContextGraphState,
 )
 
 
 async def vfRecalculateContextBlock(
-    user_id: int, relation_chain_id: int, narrative: str
+    user_id: int, relation_chain_id: int, narrative: str | None
 ):
     # 鉴权
     with session() as db:
@@ -29,10 +29,16 @@ async def vfRecalculateContextBlock(
         {
             "user_id": user_id,
             "relation_chain_id": int(relation_chain_id),
+            "type": (
+                "narrative"
+                if narrative is not None and narrative.strip() != ""
+                else "no_material"
+            ),
+            "for_virtual_figure": True,
             "narrative": narrative,
         }
     )
-    context_state: ContextGraphState = await context_graph.ainvoke(initial_state)
+    context_state: ContextGraphOutput = await context_graph.ainvoke(initial_state)
     context_block = context_state["context_block"]
     with session() as db:
         relation_chain = db.get(RelationChain, int(relation_chain_id))

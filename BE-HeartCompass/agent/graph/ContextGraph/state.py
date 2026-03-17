@@ -12,7 +12,7 @@ from database.models import (
 class Request(TypedDict):
     user_id: int
     relation_chain_id: int
-    for_virtual_figure: bool = False
+    for_virtual_figure: bool
     type: Literal["conversation", "narrative", "no_material"]
     # 情况1: conversation - 聊天记录分析
     conversation_screenshots: List[str] | None
@@ -43,23 +43,19 @@ class ContextGraphState(TypedDict):
     mbti_knowledges: List[Knowledge] | None
     interaction_signals: List[InteractionSignal] | None
     context_block: str | None  # 组织后的关系与画像上下文
+    relevant_knowledge: str | None  # 组织后的相关知识
 
 
-def initContextGraphState(request: Request) -> ContextGraphState:
+class ContextGraphInput(TypedDict):
+    request: Request
+
+
+class ContextGraphOutput(TypedDict):
+    context_block: str | None
+    relevant_knowledge: str | None
+
+
+def initContextGraphState(request: Request) -> ContextGraphInput:
     return {
         "request": request,
-        "basic_context": {
-            "his_mbti": None,
-            "his_profile": {},
-            "current_stage": None,
-        },
-        "recall_query": None,
-        "recalled_items": {
-            "events": [],
-            "chat_topics": [],
-            "derived_insights": [],
-        },
-        "mbti_knowledges": [],
-        "interaction_signals": [],
-        "context_block": None,
     }
