@@ -1,7 +1,6 @@
 import json
 import logging
 
-
 from .state import ContextGraphState
 from ..utils import getValueFromEntity, formatList, appendLabelIfValue
 from database.database import session
@@ -10,21 +9,18 @@ from database.models import (
     InteractionSignal,
     Knowledge,
 )
-from database.enums import RelationStage
 from server.services.ai import (
     generateRecallQueriesFromScreenshots,
     generateRecallQueriesFromNarrative,
 )
 from server.services.embedding import recallEmbeddingFromDB
 
-
-
 logger = logging.getLogger(__name__)
 
 
 # 生成关系与画像
 async def nodeGenBasicContext(state: ContextGraphState) -> dict:
-    """Generate basic context for the graph"""
+    logger.info("nodeGenBasicContext is called")
     request = state["request"]
     his_mbti = None
     his_profile = {}
@@ -59,6 +55,7 @@ async def nodeGenBasicContext(state: ContextGraphState) -> dict:
 
     _setIfValue("name", crush.name, "姓名")
     _setIfValue("gender", crush.gender.value if crush.gender else None, "性别")
+    _setIfValue("mbti", crush.mbti.value if crush.mbti else None, "MBTI类型")
     _setIfValue("birthday", crush.birthday, "生日")
     _setIfValue("occupation", crush.occupation, "职业")
     _setIfValue("education", crush.education, "教育背景")
@@ -86,9 +83,8 @@ async def nodeGenBasicContext(state: ContextGraphState) -> dict:
 
 
 # 根据聊天截图和对方画像生成向量召回query
-async def nodeBuildRecallQueryFromScreenshots(
-    state: ContextGraphState
-) -> dict:
+async def nodeBuildRecallQueryFromScreenshots(state: ContextGraphState) -> dict:
+    logger.info("nodeBuildRecallQueryFromScreenshots is called")
     recall_query = None
 
     screenshot_urls = state["request"].get("conversation_screenshots")
@@ -118,9 +114,8 @@ async def nodeBuildRecallQueryFromScreenshots(
 
 
 # 根据自然语言叙述和对方画像生成向量召回query
-async def nodeBuildRecallQueriesFromNarrative(
-    state: ContextGraphState
-) -> dict:
+async def nodeBuildRecallQueriesFromNarrative(state: ContextGraphState) -> dict:
+    logger.info("nodeBuildRecallQueriesFromNarrative is called")
     recall_query = None
 
     narrative = state["request"].get("narrative")
@@ -148,6 +143,7 @@ async def nodeBuildRecallQueriesFromNarrative(
 async def nodeRecallFromDB(
     state: ContextGraphState,
 ) -> dict:
+    logger.info("nodeRecallFromDB is called")
     events = []
     chat_topics = []
     derived_insights = []
@@ -197,7 +193,8 @@ async def nodeRecallFromDB(
 # 关键字召回MBTI相关知识
 async def nodeGetMBTIKnowledge(
     state: ContextGraphState,
-) -> list:
+) -> dict:
+    logger.info("nodeGetMBTIKnowledge is called")
     mbti_knowledges = []
 
     # 通过mbti关键字召回相关知识，不使用向量召回
@@ -215,7 +212,7 @@ async def nodeGetMBTIKnowledge(
             .all()
         )
         mbti_knowledges.extend(knowledges_for_this_mbti)
-    
+
     # 不使用向量召回知识
     # knowledge_query = recall_queries.get("knowledge_query")
     # if knowledge_query is not None:
@@ -238,15 +235,18 @@ async def nodeGetMBTIKnowledge(
     }
 
 
+# 获取当前最新的InteractionSignal
 async def nodeGetInteractionSignal(
     state: ContextGraphState,
-) -> list:
+) -> dict:
+    logger.info("nodeGetInteractionSignal is called")
     interaction_signals = []
     with session() as db:
         latest_interaction_signal = (
             db.query(InteractionSignal)
             .filter(
-                InteractionSignal.relation_chain_id == state["request"].get("relation_chain_id"),
+                InteractionSignal.relation_chain_id
+                == state["request"].get("relation_chain_id"),
                 InteractionSignal.is_active == True,
             )
             .order_by(InteractionSignal.created_at.desc())
@@ -260,25 +260,40 @@ async def nodeGetInteractionSignal(
     }
 
 
+# “召回分支”先收敛到统一节点
+async def nodeRecallBranchDone(state: ContextGraphState) -> dict:
+    logger.info("nodeRecallBranchDone is called")
+    return {}
 
 
+# 组织整合上下文
 async def nodeOrganizeContext(
     state: ContextGraphState,
-) -> str:
+) -> dict:
+    logger.info("nodeOrganizeContext is called")
     basic_context = state["basic_context"]
-    recall_items = state["recalled_items"]
+    recalled_items = state["recalled_items"]
     mbti_knowledges = state["mbti_knowledges"]
     interaction_signals = state["interaction_signals"]
 
     for_virtual_figure = state["request"].get("for_virtual_figure", False)
 
+    # context_block - 关系与画像上下文
     context_block = ""
-    context_block += appendLabelIfValue("**当前双方关系**：", basic_context.get("current_stage"))
 
-    context_block += appendLabelIfValue("**重要！** **节选对方对用户的交谈风格**：", basic_context["his_profile"].get("words_to_user"))
+    context_block += appendLabelIfValue(
+        "**当前双方关系**：", basic_context.get("current_stage")
+    )
+    context_block += appendLabelIfValue(
+        "**重要！** **节选对方对用户的交谈风格**：",
+        basic_context["his_profile"].get("words_to_user"),
+    )
     if not for_virtual_figure:  # 非虚拟人物才需要节选用户对对方的交谈风格
-        context_block += appendLabelIfValue("**重要！** **节选用户对对方的交谈风格**：", basic_context["his_profile"].get("words_from_user"))
-    
+        context_block += appendLabelIfValue(
+            "**重要！** **节选用户对对方的交谈风格**：",
+            basic_context["his_profile"].get("words_from_user"),
+        )
+
     context_block += f"**对方画像**：\n"
     for key, value in basic_context["his_profile"].items():
         if key in ["words_to_user", "words_from_user"]:
@@ -287,7 +302,7 @@ async def nodeOrganizeContext(
 
     context_block += "\n"
 
-    if len(events := recall_items["events"]) > 0:
+    if len(events := recalled_items.get("events")) > 0:
         context_block += "**可能参考的过往事件**：\n"
         for idx, event in enumerate(events):
             content = getValueFromEntity(event, "content")
@@ -306,15 +321,14 @@ async def nodeOrganizeContext(
             context_block += appendLabelIfValue("其他信息", other_info)
             context_block += "\n"
 
-
-    if len(chat_topics := recall_items["chat_topics"]) > 0:
+    if len(chat_topics := recalled_items.get("chat_topics")) > 0:
         context_block += "**可能参考的过往聊天话题**：\n"
         for idx, chat_topic in enumerate(chat_topics):
             title = getValueFromEntity(chat_topic, "title")
             summary = getValueFromEntity(chat_topic, "summary")
             content = getValueFromEntity(chat_topic, "content")
-            tags = formatList(getValueFromEntity(chat_topic, "tags"))
-            participants = formatList(getValueFromEntity(chat_topic, "participants"))
+            # tags = formatList(getValueFromEntity(chat_topic, "tags"))
+            # participants = formatList(getValueFromEntity(chat_topic, "participants"))
             topic_time = getValueFromEntity(chat_topic, "topic_time")
             attitude = getValueFromEntity(chat_topic, "attitude")
             weight = getValueFromEntity(chat_topic, "weight")
@@ -332,14 +346,15 @@ async def nodeOrganizeContext(
             context_block += appendLabelIfValue("其他信息", other_info)
             context_block += "\n"
 
-
-    if len(derived_insights := recall_items["derived_insights"]) > 0:
+    if len(derived_insights := recalled_items.get("derived_insights")) > 0:
         context_block += "**可能参考的推断/洞察**：\n"
         for idx, derived_insight in enumerate(derived_insights):
             insight = getValueFromEntity(derived_insight, "insight")
             confidence = getValueFromEntity(derived_insight, "confidence")
             weight = getValueFromEntity(derived_insight, "weight")
-            additional_info = formatList(getValueFromEntity(derived_insight, "additional_info"))
+            additional_info = formatList(
+                getValueFromEntity(derived_insight, "additional_info")
+            )
 
             context_block += f"推断/洞察{idx+1}：\n"
             context_block += appendLabelIfValue("洞察", insight)
@@ -348,8 +363,7 @@ async def nodeOrganizeContext(
             context_block += appendLabelIfValue("其他信息", additional_info)
             context_block += "\n"
 
-
-    if len(interaction_signals := recall_items["interaction_signals"]) > 0:
+    if len(interaction_signals) > 0:
         context_block += "**可能参考的互动信号**：\n"
         for idx, interaction_signal in enumerate(interaction_signals):
             frequency = getValueFromEntity(interaction_signal, "frequency")
@@ -368,20 +382,23 @@ async def nodeOrganizeContext(
             context_block += appendLabelIfValue("重要性", weight)
             context_block += "\n"
 
+    # relevant_knowledge - 相关知识
+    relevant_knowledge = ""
 
-    context_block += f"对方MBTI类型：{basic_context.get('his_mbti')}\n"
-    if len(mbti_knowledges := recall_items["mbti_knowledges"]) > 0:
-        context_block += "**可能参考的MBTI相关知识**：\n"
+    relevant_knowledge += f"对方MBTI类型：{basic_context.get('his_mbti')}\n"
+    if len(mbti_knowledges) > 0:
+        relevant_knowledge += "**可能参考的MBTI相关知识**：\n"
         for idx, knowledge in enumerate(mbti_knowledges):
             summary = getValueFromEntity(knowledge, "summary")
             content = getValueFromEntity(knowledge, "content")
             weight = getValueFromEntity(knowledge, "weight")
 
-            context_block += f"知识{idx+1}：\n"
-            context_block += appendLabelIfValue("摘要", summary)
-            context_block += appendLabelIfValue("内容", content)
-            context_block += "\n"
+            relevant_knowledge += f"知识{idx+1}：\n"
+            relevant_knowledge += appendLabelIfValue("摘要", summary)
+            relevant_knowledge += appendLabelIfValue("内容", content)
+            relevant_knowledge += "\n"
 
     return {
         "context_block": context_block,
+        "relevant_knowledge": relevant_knowledge,
     }

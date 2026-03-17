@@ -1,7 +1,7 @@
 from typing import List
 
 from agent.graph.ContextGraph.graph import getContextGraph
-from agent.graph.ContextGraph.state import ContextGraphState, initContextGraphState
+from agent.graph.ContextGraph.state import ContextGraphOutput, initContextGraphState
 from agent.graph.AnalysisGraph.graph import getAnalysisGraph
 from agent.graph.AnalysisGraph.state import (
     AnalysisGraphInput,
@@ -35,15 +35,6 @@ async def analysisConversationAnalysis(
         # 调用图
         context_graph = await getContextGraph()
         analysis_graph = await getAnalysisGraph()
-        initial_state = initContextGraphState(
-            {
-                "user_id": user_id,
-                "relation_chain_id": int(relation_chain_id),
-                "conversation_screenshots": list(conversation_screenshots),
-                "crush_name": crush_name,
-                "additional_context": additional_context,
-            }
-        )
         # 落库
         new_analysis = Analysis(
             relation_chain_id=int(relation_chain_id),
@@ -55,9 +46,23 @@ async def analysisConversationAnalysis(
         db.commit()
         db.refresh(new_analysis)
 
-    context_state: ContextGraphState = await context_graph.ainvoke(initial_state)
+    initial_state = initContextGraphState(
+        {
+            "user_id": user_id,
+            "relation_chain_id": int(relation_chain_id),
+            "for_virtual_figure": False,
+            "type": "conversation",
+            "conversation_screenshots": list(conversation_screenshots),
+            "crush_name": crush_name,
+            "additional_context": additional_context,
+        }
+    )
+    context_state: ContextGraphOutput = await context_graph.ainvoke(initial_state)
     result: AnalysisGraphOutput = await analysis_graph.ainvoke(
-        AnalysisGraphInput(**context_state),
+        AnalysisGraphInput(
+            request=initial_state["request"],
+            context_block=context_state.get("context_block") or "",
+        ),
     )
 
     # 两阶段 session，避免ainvoke耗时操作长时间占用数据库连接
@@ -105,6 +110,7 @@ async def analysisNarrativeAnalysis(
             {
                 "user_id": user_id,
                 "relation_chain_id": int(relation_chain_id),
+                "type": "narrative",
                 "narrative": narrative,
             }
         )
@@ -118,9 +124,12 @@ async def analysisNarrativeAnalysis(
         db.commit()
         db.refresh(new_analysis)
 
-    context_state: ContextGraphState = await context_graph.ainvoke(initial_state)
+    context_state: ContextGraphOutput = await context_graph.ainvoke(initial_state)
     result: AnalysisGraphOutput = await analysis_graph.ainvoke(
-        AnalysisGraphInput(**context_state)
+        AnalysisGraphInput(
+            request=initial_state["request"],
+            context_block=context_state.get("context_block") or "",
+        )
     )
     # 两阶段 session，避免ainvoke耗时操作长时间占用数据库连接
     with session() as db:
