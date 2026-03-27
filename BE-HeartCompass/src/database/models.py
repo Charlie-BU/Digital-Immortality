@@ -101,6 +101,8 @@ class User(Base, SerializableMixin):
     email = Column(String(128), nullable=True, unique=True, comment="用户邮箱")
     level = Column(Enum(UserLevel), default=UserLevel.L4, comment="用户等级")
     mbti = Column(Enum(MBTI), nullable=True, comment="用户MBTI类型")
+
+    lark_open_id = Column(String(128), nullable=True, unique=True, comment="用户飞书open_id")
     created_at = Column(
         DateTime, default=datetime.now(timezone.utc), comment="用户创建时间"
     )
@@ -464,7 +466,7 @@ class InteractionSignal(Base, SerializableMixin):
         return f"<InteractionSignal {self.id}>"
 
 
-# ---- 推断/洞察（Crush信息、事件和聊天话题综合推断） ----
+# ---- 推断/洞察（Crush信息、事件和聊天话题综合推断）（暂未启用） ----
 class DerivedInsight(Base, SerializableMixin):
     __tablename__ = "derived_insight"
 
