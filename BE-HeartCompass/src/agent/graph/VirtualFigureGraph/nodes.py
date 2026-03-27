@@ -1,16 +1,14 @@
-from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage
 from datetime import datetime
 import json
 import logging
 import os
 
-
 from src.agent.graph.VirtualFigureGraph.state import (
     VirtualFigureGraphState,
     VirtualFigureGraphOutput,
 )
-from src.agent.llm import prepareLLM
+from src.agent.llm import arkAinvoke
 from src.agent.prompt import getPrompt
 from src.agent.graph.utils import getValueFromEntity, formatList, appendLabelIfValue
 from src.database.database import session
@@ -29,14 +27,17 @@ async def nodeInitState(state: VirtualFigureGraphState) -> dict:
     context_block = state.get("context_block", "")
     words_to_user = state.get("words_to_user", "")
     recalled_facts_from_db = state.get("recalled_facts_from_db", "")
-    recalled_facts_from_mem0 = state.get("recalled_facts_from_mem0", [])
-    llm_output = state.get("llm_output", {"messages_to_send": []})
+    recalled_facts_from_viking = state.get("recalled_facts_from_viking", [])
+    llm_output = state.get(
+        "llm_output",
+        {"messages_to_send": [], "reasoning_content": ""},
+    )
     return {
         "messages": messages,
         "context_block": context_block,
         "words_to_user": words_to_user,
         "recalled_facts_from_db": recalled_facts_from_db,
-        "recalled_facts_from_mem0": recalled_facts_from_mem0,
+        "recalled_facts_from_viking": recalled_facts_from_viking,
         "llm_output": llm_output,
     }
 
@@ -51,6 +52,7 @@ async def nodeLoadPersona(state: VirtualFigureGraphState) -> dict:
         relation_chain = db.get(RelationChain, int(relation_chain_id))
         context_block = relation_chain.context_block
         if context_block is None or context_block == "":
+            # 若当前关系链无context_block，先计算后写入
             try:
                 res = await vfRecalculateContextBlock(
                     user_id,
@@ -177,13 +179,13 @@ async def nodeRecallFromDB(state: VirtualFigureGraphState) -> dict:
     }
 
 
-# todo：接入方舟Mem0
-async def nodeRecallFromMem0(state: VirtualFigureGraphState) -> dict:
-    logger.info("nodeRecallFromMem0 is called")
+# todo：接入火山Viking记忆库
+async def nodeRecallFromViking(state: VirtualFigureGraphState) -> dict:
+    logger.info("nodeRecallFromViking is called")
 
-    state["recalled_facts_from_mem0"] = []
+    state["recalled_facts_from_viking"] = []
     return {
-        "recalled_facts_from_mem0": state["recalled_facts_from_mem0"],
+        "recalled_facts_from_viking": state["recalled_facts_from_viking"],
     }
 
 
@@ -195,8 +197,6 @@ async def nodeBuildMessage(state: VirtualFigureGraphState) -> dict:
     reply_prompt = "\n".join(messages_received_parsed)
 
     state["messages"].append(HumanMessage(content=reply_prompt or ""))
-    # todo: 调试，上线删
-    print(f"当前短期记忆：\n{state['messages']}\n\n")
     return {
         "messages": state["messages"],
     }
@@ -207,61 +207,75 @@ async def nodeCallLLM(state: VirtualFigureGraphState) -> VirtualFigureGraphOutpu
 
     current_timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    llm: ChatOpenAI = prepareLLM(model="DOUBAO_2_0_LITE", options={
-        "temperature": 0.3,
-        "reasoning_effort": "low",
-    })
-    messages_to_call = [
+    messages_to_send = [
         # 1. 系统提示词
         SystemMessage(
             content=(
                 await getPrompt(
-                    os.getenv(
-                        "VIRTUAL_FIGURE_SYSTEM_PROMPT",
-                        {
-                            "words_to_user": state["words_to_user"],
-                            "current_timestamp": current_timestamp,
-                        },
-                    )
+                    os.getenv("VIRTUAL_FIGURE_SYSTEM_PROMPT"),
+                    {
+                        "words_to_user": state["words_to_user"],
+                        "current_timestamp": current_timestamp,
+                    },
                 )
             )
         ),
         # 2. 关系与画像上下文
         SystemMessage(content=f"关系与画像上下文：\n{state['context_block']}"),
-        # 3. DB召回的长期记忆
+        # 3. DB召回的长期记忆（真实）
         SystemMessage(
-            content=f"可能参考的召回的长期记忆：\n{state['recalled_facts_from_db']} \n"
+            content=f"可能参考的召回的长期记忆：\n{state['recalled_facts_from_db']}"
         ),
-        # 4. Mem0召回的长期记忆
+        # 4. Viking召回的长期记忆（不可信）
         SystemMessage(
-            content=f"可能参考的召回的长期记忆：\n{json.dumps(state['recalled_facts_from_mem0'], ensure_ascii=False)}"
+            content=f"可能参考的召回的长期记忆：\n{json.dumps(state['recalled_facts_from_viking'], ensure_ascii=False)}"
         ),
     ] + state["messages"]
 
-    # todo：换Ark拿reasoning_content?
-    response = await llm.ainvoke(messages_to_call)
-    response_content = response.content if hasattr(response, "content") else response
+    # 使用 Ark SDK 替换 LangChain ainvoke 拿reasoning_content
+    # llm: ChatOpenAI = prepareLLM(model="DOUBAO_2_0_LITE", options={
+    #     "temperature": 0.3,
+    #     "reasoning_effort": "low",
+    # })
+    # response = await llm.ainvoke(messages_to_send)
+    # response_content = response.content if hasattr(response, "content") else response
 
-    parsed_resp = None
-    if isinstance(response_content, dict):
-        parsed_resp = response_content
-    elif isinstance(response_content, str):
-        try:
-            parsed_resp = json.loads(response_content)
-        except json.JSONDecodeError:
-            logger.warning(f"Error parsing LLM response: {response_content}")
-            parsed_resp = None
-    # 兜底
-    if parsed_resp is None:
-        logger.warning(f"Error parsing LLM response: {response_content}")
+    resp = await arkAinvoke(
+        model="DOUBAO_2_0_LITE",
+        messages=messages_to_send,
+        model_options={
+            "temperature": 0.3,
+            "reasoning_effort": "low",
+        },
+    )
+    output = resp["output"]
+    reasoning_content = resp["reasoning_content"]
+    ai_message = resp["ai_message"]
+
+    try:
+        parsed_output = json.loads(output)
+    except json.JSONDecodeError:
+        logger.warning(f"Error parsing LLM response: {output}")
         state["llm_output"]["messages_to_send"] = []
         return {
             "llm_output": state["llm_output"],
         }
-    # parse成功才写入short-term memory
-    state["messages"].append(response)
 
-    state["llm_output"]["messages_to_send"] = parsed_resp.get("messages_to_send", [])
+    if not isinstance(parsed_output, dict):
+        logger.warning(f"Error parsing LLM response: {output}")
+        state["llm_output"]["messages_to_send"] = []
+        return {
+            "llm_output": state["llm_output"],
+        }
+
+    state["llm_output"]["messages_to_send"] = parsed_output.get("messages_to_send", [])
+    state["llm_output"]["reasoning_content"] = reasoning_content or ""
+
+    # parse成功写入short-term memory
+    state["messages"].append(ai_message)
+
+    # todo: 调试，线上删
+    logger.info(f"\n当前state：\n{state}\n\n")
 
     return {
         "llm_output": state["llm_output"],
