@@ -14,7 +14,7 @@ analysis_router = SubRouter(__file__, prefix="/analysis")
 # 全局异常处理
 @analysis_router.exception
 def handleException(error):
-    return Response(status_code=500, description=f"error msg: {error}", headers={})
+    return Response(status_code=500, description=f"error msg: {error}", headers={})  # todo: server 报错信息暴露到客户端，危险，生产环境需移除
 
 
 # 鉴权中间件

@@ -1,8 +1,8 @@
 import logging
 from sqlalchemy.orm import Session
 
-from src.database.enums import UserGender, RelationStage, MBTI
-from src.database.models import RelationChain, Event, Crush, User
+from src.database.enums import UserGender, RelationStage, MBTI, parseEnum
+from src.database.models import RelationChain, Event, ChatTopic, Crush, User
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +52,11 @@ async def ccHardDeleteEvent(db: Session, user_id: int, event_id: int) -> dict:
             return {
                 "status": -2,
                 "message": "You are not authorized to delete this event",
+            }
+        if event.is_active:
+            return {
+                "status": -3,
+                "message": "Event has not been deleted yet",
             }
 
         db.delete(event)
@@ -121,6 +126,128 @@ async def ccGetEventsByRelationChainId(
     }
 
 
+async def ccDeleteChatTopic(db: Session, user_id: int, chat_topic_id: int) -> dict:
+    try:
+        chat_topic = db.get(ChatTopic, chat_topic_id)
+        if not chat_topic:
+            return {
+                "status": -1,
+                "message": "Chat topic not found",
+            }
+        if chat_topic.relation_chain.user_id != user_id:
+            return {
+                "status": -2,
+                "message": "You are not authorized to delete this chat topic",
+            }
+        if not chat_topic.is_active:
+            return {
+                "status": -3,
+                "message": "Chat topic is not active",
+            }
+        chat_topic.is_active = False
+        db.commit()
+        return {
+            "status": 200,
+            "message": "Chat topic deleted",
+        }
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error deleting chat topic {chat_topic_id}: {e}")
+        return {
+            "status": -4,
+            "message": "Error deleting chat topic",
+        }
+
+
+async def ccHardDeleteChatTopic(db: Session, user_id: int, chat_topic_id: int) -> dict:
+    try:
+        chat_topic = db.get(ChatTopic, chat_topic_id)
+        if not chat_topic:
+            return {
+                "status": -1,
+                "message": "Chat topic not found",
+            }
+        if chat_topic.relation_chain.user_id != user_id:
+            return {
+                "status": -2,
+                "message": "You are not authorized to delete this chat topic",
+            }
+        if chat_topic.is_active:
+            return {
+                "status": -3,
+                "message": "Chat topic has not been deleted yet",
+            }
+
+        db.delete(chat_topic)
+        db.commit()
+        return {
+            "status": 200,
+            "message": "Chat topic hard deleted",
+        }
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error hard deleting chat topic {chat_topic_id}: {e}")
+        return {
+            "status": -4,
+            "message": "Error hard deleting chat topic",
+        }
+
+
+async def ccGetChatTopicById(db: Session, user_id: int, chat_topic_id: int) -> dict:
+    chat_topic = db.get(ChatTopic, chat_topic_id)
+    if not chat_topic:
+        return {
+            "status": -1,
+            "message": "Chat topic not found",
+        }
+    if chat_topic.relation_chain.user_id != user_id:
+        return {
+            "status": -2,
+            "message": "You are not authorized to get this chat topic",
+        }
+    if not chat_topic.is_active:
+        return {
+            "status": -3,
+            "message": "Chat topic has been deleted",
+        }
+    return {
+        "status": 200,
+        "message": "Get chat topic success",
+        "chat_topic": chat_topic.toJson(),
+    }
+
+
+async def ccGetChatTopicsByRelationChainId(
+    db: Session, user_id: int, relation_chain_id: int, page_size: int, current_page: int
+) -> dict:
+    relation_chain = db.get(RelationChain, relation_chain_id)
+    if not relation_chain:
+        return {
+            "status": -1,
+            "message": "Relation chain not found",
+        }
+    if relation_chain.user_id != user_id:
+        return {
+            "status": -2,
+            "message": "You are not authorized to get chat topics in this relation chain",
+        }
+    query = (
+        db.query(ChatTopic)
+        .filter(
+            ChatTopic.relation_chain_id == relation_chain_id,
+            ChatTopic.is_active == True,
+        )
+        .order_by(ChatTopic.created_at.desc())
+    )
+    chat_topics = query.limit(page_size).offset((current_page - 1) * page_size).all()
+    return {
+        "status": 200,
+        "message": "Get chat topics success",
+        "total": query.count(),
+        "chat_topics": [chat_topic.toJson() for chat_topic in chat_topics],
+    }
+
+
 async def ccCreateCrush(
     db: Session,
     user_id: int,
@@ -139,7 +266,7 @@ async def ccCreateCrush(
         db.commit()
         return {
             "status": 200,
-            "message": "Crush created",
+            "message": "Crush successfully created",
         }
 
     except Exception as e:
@@ -162,10 +289,12 @@ async def ccCreateRelationChain(
                 "message": "Permission denied: This is not your crush",
             }
 
-        existing_chain_lenth = (
-            db.query(RelationChain).filter(RelationChain.crush_id == crush_id).count()
+        existing_chain_length = (
+            db.query(RelationChain)
+            .filter(RelationChain.crush_id == crush_id, RelationChain.is_active == True)
+            .count()
         )
-        if existing_chain_lenth > 0:
+        if existing_chain_length > 0:
             return {"status": -3, "message": "Crush ID conflict: already bound"}
         new_relation_chain = RelationChain(
             user_id=user_id,
@@ -225,7 +354,7 @@ async def ccDeleteRelationChain(
             return {"status": -3, "message": "RelationChain has been deleted"}
         relation_chain.is_active = False
         db.commit()
-        return {"status": 200, "message": "RelationChain deleted"}
+        return {"status": 200, "message": "RelationChain successfully deleted"}
     except Exception as e:
         db.rollback()
         logger.error(f"Failed to delete relationChain {relation_chain_id}:{e}")
@@ -240,10 +369,14 @@ async def ccGetCrushById(db: Session, user_id: int, crush_id: int) -> dict:
         return {"status": -2, "message": "Permission denied: This is not your crush"}
     if not crush.is_active:
         return {"status": -3, "message": "Crush has been deleted"}
-    return {"status": 200, "message": "Get crush success", "crush": crush.toJson()}
+    return {
+        "status": 200,
+        "message": "Get crush success",
+        "crush": crush.toJson(include_relations=True),
+    }
 
 
-async def ccGetCrushByUser(
+async def ccGetCrushesByUser(
     db: Session, user_id: int, page_size: int, current_page: int
 ) -> dict:
     query = (
@@ -251,12 +384,12 @@ async def ccGetCrushByUser(
         .filter(Crush.creator_id == user_id, Crush.is_active == True)
         .order_by(Crush.created_at.desc())
     )
-    crush = query.limit(page_size).offset((current_page - 1) * page_size).all()
+    crushes = query.limit(page_size).offset((current_page - 1) * page_size).all()
     return {
         "status": 200,
-        "message": "Get crush success",
+        "message": "Get crushes success",
         "total": query.count(),
-        "crushes": [crush.toJson() for crush in crush],
+        "crushes": [crush.toJson() for crush in crushes],
     }
 
 
@@ -275,13 +408,12 @@ async def ccGetRelationChainById(
         return {"status": -3, "message": "RelationChain has been deleted"}
     return {
         "status": 200,
-        "message": "Get relationChain success",
-        "relation_chain": relation_chain.toJson(),
-        "crush_name": relation_chain.crush.name,
+        "message": "Get relation chain success",
+        "relation_chain": relation_chain.toJson(include_relations=True),
     }
 
 
-async def ccGetRelationChainByUser(
+async def ccGetRelationChainsByUser(
     db: Session, user_id: int, page_size: int, current_page: int
 ) -> dict:
     query = (
@@ -292,10 +424,11 @@ async def ccGetRelationChainByUser(
     relation_chain = query.limit(page_size).offset((current_page - 1) * page_size).all()
     return {
         "status": 200,
-        "message": "Get relationChain success",
+        "message": "Get relation chains success",
         "total": query.count(),
         "relation_chains": [
-            relation_chain.toJson() for relation_chain in relation_chain
+            relation_chain.toJson(include_relations=True)
+            for relation_chain in relation_chain
         ],
     }
 
@@ -317,6 +450,16 @@ async def ccUpdateCrush(db: Session, user_id: int, crush_id: int, body: dict) ->
         for key in body:
             if key in editable_columns:
                 new_value = body[key]
+                if key == "gender":
+                    try:
+                        new_value = parseEnum(UserGender, new_value)
+                    except ValueError:
+                        return {"status": -5, "message": "Invalid gender"}
+                if key == "mbti":
+                    try:
+                        new_value = parseEnum(MBTI, new_value)
+                    except ValueError:
+                        return {"status": -6, "message": "Invalid mbti"}
                 setattr(crush, key, new_value)
                 update_count += 1
         if update_count > 0:

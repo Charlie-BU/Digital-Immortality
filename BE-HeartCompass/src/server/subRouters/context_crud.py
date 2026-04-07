@@ -8,14 +8,17 @@ from src.server.services.context_crud import (
     ccDeleteEvent,
     ccGetEventById,
     ccGetEventsByRelationChainId,
+    ccDeleteChatTopic,
+    ccGetChatTopicById,
+    ccGetChatTopicsByRelationChainId,
     ccCreateCrush,
     ccCreateRelationChain,
     ccDeleteCrush,
     ccDeleteRelationChain,
     ccGetCrushById,
-    ccGetCrushByUser,
+    ccGetCrushesByUser,
     ccGetRelationChainById,
-    ccGetRelationChainByUser,
+    ccGetRelationChainsByUser,
     ccUpdateCrush,
 )
 from src.database.database import session
@@ -28,7 +31,9 @@ context_crud_router = SubRouter(__file__, prefix="/context-crud")
 # 全局异常处理
 @context_crud_router.exception
 def handleException(error):
-    return Response(status_code=500, description=f"error msg: {error}", headers={})
+    return Response(
+        status_code=500, description=f"error msg: {error}", headers={}
+    )  # todo: server 报错信息暴露到客户端，危险，生产环境需移除
 
 
 # 鉴权中间件
@@ -71,6 +76,46 @@ async def getEventsByRelationChainId(request: Request):
         return res
 
 
+@context_crud_router.post("/deleteChatTopic", auth_required=True)
+async def deleteChatTopic(request: Request):
+    body = request.json()
+    user_id = userGetUserIdByAccessToken(request)
+    chat_topic_id = body["id"]
+    with session() as db:
+        res = await ccDeleteChatTopic(
+            db=db, user_id=user_id, chat_topic_id=int(chat_topic_id)
+        )
+        return res
+
+
+@context_crud_router.get("/getChatTopicById", auth_required=True)
+async def getChatTopicById(request: Request):
+    user_id = userGetUserIdByAccessToken(request)
+    chat_topic_id = request.query_params.get("id", None)
+    with session() as db:
+        res = await ccGetChatTopicById(
+            db=db, user_id=user_id, chat_topic_id=int(chat_topic_id)
+        )
+        return res
+
+
+@context_crud_router.get("/getChatTopicsByRelationChainId", auth_required=True)
+async def getChatTopicsByRelationChainId(request: Request):
+    user_id = userGetUserIdByAccessToken(request)
+    relation_chain_id = request.query_params.get("id", None)
+    page_size = request.query_params.get("page_size", "10")
+    current_page = request.query_params.get("current_page", "1")
+    with session() as db:
+        res = await ccGetChatTopicsByRelationChainId(
+            db=db,
+            user_id=user_id,
+            relation_chain_id=int(relation_chain_id),
+            page_size=int(page_size),
+            current_page=int(current_page),
+        )
+        return res
+
+
 @context_crud_router.post("/createCrush", auth_required=True)
 async def createCrush(request: Request):
     body = request.json()
@@ -100,7 +145,7 @@ async def createRelationChain(request: Request):
         res = await ccCreateRelationChain(
             db=db,
             user_id=user_id,
-            crush_id=crush_id,
+            crush_id=int(crush_id),
             stage=stage,
         )
         return res
@@ -112,7 +157,7 @@ async def deleteCrush(request: Request):
     user_id = userGetUserIdByAccessToken(request)
     crush_id = body["crush_id"]
     with session() as db:
-        res = await ccDeleteCrush(db=db, user_id=user_id, crush_id=crush_id)
+        res = await ccDeleteCrush(db=db, user_id=user_id, crush_id=int(crush_id))
         return res
 
 
@@ -123,7 +168,7 @@ async def deleteRelationChain(request: Request):
     relation_chain_id = body["relation_chain_id"]
     with session() as db:
         res = await ccDeleteRelationChain(
-            db=db, user_id=user_id, relation_chain_id=relation_chain_id
+            db=db, user_id=user_id, relation_chain_id=int(relation_chain_id)
         )
         return res
 
@@ -131,19 +176,19 @@ async def deleteRelationChain(request: Request):
 @context_crud_router.get("/getCrushById", auth_required=True)
 async def getCrushById(request: Request):
     user_id = userGetUserIdByAccessToken(request)
-    crush_id = request.query_params.get("crush_id", None)
+    crush_id = request.query_params.get("id", None)
     with session() as db:
         res = await ccGetCrushById(db=db, user_id=user_id, crush_id=int(crush_id))
         return res
 
 
-@context_crud_router.get("/getCrushByUser", auth_required=True)
-async def getCrushByUser(request: Request):
+@context_crud_router.get("/getCrushesByUser", auth_required=True)
+async def getCrushesByUser(request: Request):
     user_id = userGetUserIdByAccessToken(request)
     page_size = request.query_params.get("page_size", "10")
     current_page = request.query_params.get("current_page", "1")
     with session() as db:
-        res = await ccGetCrushByUser(
+        res = await ccGetCrushesByUser(
             db=db,
             user_id=user_id,
             page_size=int(page_size),
@@ -163,13 +208,13 @@ async def getRelationChainById(request: Request):
         return res
 
 
-@context_crud_router.get("/getRelationChainByUser", auth_required=True)
-async def getRelationChainByUser(request: Request):
+@context_crud_router.get("/getRelationChainsByUser", auth_required=True)
+async def getRelationChainsByUser(request: Request):
     user_id = userGetUserIdByAccessToken(request)
     page_size = request.query_params.get("page_size", "10")
     current_page = request.query_params.get("current_page", "1")
     with session() as db:
-        res = await ccGetRelationChainByUser(
+        res = await ccGetRelationChainsByUser(
             db=db,
             user_id=user_id,
             page_size=int(page_size),
@@ -184,5 +229,7 @@ async def updateCrush(request: Request):
     user_id = userGetUserIdByAccessToken(request)
     crush_id = body["crush_id"]
     with session() as db:
-        res = await ccUpdateCrush(db=db, user_id=user_id, crush_id=crush_id, body=body)
+        res = await ccUpdateCrush(
+            db=db, user_id=user_id, crush_id=int(crush_id), body=body
+        )
         return res
