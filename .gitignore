@@ -12,9 +12,8 @@ wheels/
 .DS_Store
 .langgraph_api
 .vscode
+.trae
 
 # Alembic migrations
-BE-HeartCompass/alembic/versions/
-.trae/rules/rule.md
-BE-HeartCompass/alembic.ini
-BE-HeartCompass/alembic.ini
+alembic.ini
+alembic/versions/
