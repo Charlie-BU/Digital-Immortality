@@ -20,7 +20,7 @@ async def addKnowledgePiece(
     """
     if not content or content.strip() == "":
         return {"status": -1, "message": "Content is empty"}
-    if not weight <= 0 or weight > 1:
+    if weight <= 0 or weight > 1:
         return {"status": -2, "message": "Weight must be between 0 and 1"}
 
     knowledge = Knowledge(
@@ -110,7 +110,9 @@ async def recallKnowledgePieces(
                     "semantic_score": semantic_score,
                     "weight": weight,
                     "time_decay": time_decay,
-                    "knowledge": knowledge.toJson(),
+                    "knowledge": knowledge.toJson(
+                        exclude=["embedding", "embedding_model_name"]
+                    ),
                 }
             )
 
@@ -123,7 +125,7 @@ async def recallKnowledgePieces(
         }
 
 
-async def deleteKnowledgePiece(
+def deleteKnowledgePiece(
     user_id: int,
     knowledge_id: int,
 ) -> dict:

@@ -256,3 +256,29 @@ def userModifyPassword(
             "status": 200,
             "message": "Modify password success",
         }
+
+
+def userBindLark(
+    user_id: int,
+    lark_open_id: str,
+) -> dict:
+    """
+    绑定飞书 openid
+    """
+    if not lark_open_id or lark_open_id.strip() == "":
+        return {"status": -1, "message": "Lark open id is empty"}
+    with session() as db:
+        user = db.get(User, user_id)
+        if user is None:
+            return {"status": -2, "message": "User not found"}
+        user.lark_open_id = lark_open_id
+        try:
+            db.commit()
+        except Exception as e:
+            db.rollback()
+            logger.error(f"Bind Lark failed, user_id={user_id}: {str(e)}")
+            return {"status": -3, "message": "Bind Lark failed"}
+        return {
+            "status": 200,
+            "message": "Bind Lark success",
+        }
