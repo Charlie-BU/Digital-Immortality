@@ -136,14 +136,14 @@ class FigureAndRelation(Base, SerializableMixin):
     figure_role = Column(
         Enum(FigureRole),
         default=FigureRole.STRANGER,
-        nullable=True,
+        nullable=False,
         comment="Figure 角色",
     )
     # Figure 基本信息
     figure_name = Column(String(64), nullable=False, comment="Figure 姓名")
     figure_gender = Column(Enum(Gender), nullable=False, comment="Figure 性别")
     figure_mbti = Column(Enum(MBTI), nullable=True, comment="Figure MBTI 类型")
-    figure_birthday = Column(Text, nullable=True, comment="Figure 生日")
+    figure_birthday = Column(String(128), nullable=True, comment="Figure 生日")
     figure_occupation = Column(String(128), nullable=True, comment="Figure 职业")
     figure_education = Column(String(128), nullable=True, comment="Figure 教育背景")
     figure_residence = Column(String(128), nullable=True, comment="Figure 常住地")
@@ -427,7 +427,7 @@ class FineGrainedInfoConflict(Base, SerializableMixin):
 
 
 class Knowledge(Base, SerializableMixin):
-    """静态知识库"""
+    """私有知识库"""
 
     __tablename__ = "knowledge"
     # 使用HNSW索引加速余弦相似度向量检索
@@ -441,6 +441,12 @@ class Knowledge(Base, SerializableMixin):
     )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
+
+    user_id = Column(
+        Integer, ForeignKey("user.id"), nullable=False, comment="创建的用户ID"
+    )
+    user = relationship("User", backref="knowledge_pieces")
+
     content = Column(Text, nullable=False, comment="知识内容")
     weight = Column(
         Float, nullable=False, index=True, default=1.0, comment="知识权重（重要性）"
@@ -456,6 +462,12 @@ class Knowledge(Base, SerializableMixin):
         Vector(1024), nullable=False, comment="向量表示"
     )  # 重要：模型只支持1024、2048维向量，但hnsw索引要求维度必须小于2000
 
+    is_deleted = Column(
+        Boolean,
+        nullable=False,
+        default=False,
+        comment="是否删除",
+    )
     created_at = Column(
         DateTime,
         default=datetime.now(timezone.utc),
