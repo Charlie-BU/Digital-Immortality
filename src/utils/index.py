@@ -1,3 +1,8 @@
+from datetime import datetime, timezone
+import math
+import os
+
+
 def cleanList(items: list):
     """
     清理列表中的重复字符串项，保留首次出现的项。
@@ -19,3 +24,15 @@ def cleanList(items: list):
         seen.add(value)
         result.append(value)
     return result
+
+
+def timeDecay(created_at: datetime) -> float:
+    """
+    时间衰减函数
+    """
+    now = datetime.now(timezone.utc)
+    if created_at.tzinfo is None:
+        created_at = created_at.replace(tzinfo=timezone.utc)
+    delta_days = (now - created_at).days
+
+    return math.exp(-delta_days / int(os.getenv("HALF_LIFE_DAYS")))
