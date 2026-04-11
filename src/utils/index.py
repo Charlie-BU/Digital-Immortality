@@ -1,6 +1,9 @@
 from datetime import datetime, timezone
 import math
 import os
+from sqlalchemy.orm import Session
+
+from src.database.models import FigureAndRelation, OriginalSource
 
 
 def cleanList(items: list):
@@ -36,3 +39,45 @@ def timeDecay(created_at: datetime) -> float:
     delta_days = (now - created_at).days
 
     return math.exp(-delta_days / int(os.getenv("HALF_LIFE_DAYS")))
+
+
+def checkFigureAndRelationOwnership(
+    db: Session, user_id: int, fr_id: int
+) -> FigureAndRelation | None:
+    """
+    FigureAndRelation 归属校验
+    """
+    return (
+        db.query(FigureAndRelation)
+        .filter(
+            FigureAndRelation.id == fr_id,
+            FigureAndRelation.user_id == user_id,
+            FigureAndRelation.is_deleted == False,
+        )
+        .first()
+    )
+
+
+def checkOriginalSourceOwnership(
+    db,
+    user_id: int,
+    fr_id: int,
+    original_source_id: int,
+) -> OriginalSource | None:
+    """
+    OriginalSource 归属校验
+    """
+    original_source: OriginalSource | None = (
+        db.query(OriginalSource)
+        .filter(
+            OriginalSource.id == original_source_id,
+            OriginalSource.fr_id == fr_id,
+            OriginalSource.is_deleted == False,
+        )
+        .first()
+    )
+    if original_source is None:
+        return None
+    if original_source.figure_and_relation.user_id != user_id:
+        return None
+    return original_source

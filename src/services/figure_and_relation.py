@@ -1,9 +1,11 @@
 import logging
 from typing import Any
 
-from src.database.enums import FigureRole, Gender, MBTI
+from src.database.enums import FigureRole, FineGrainedFeedDimension, Gender, MBTI
 from src.database.index import session
 from src.database.models import FigureAndRelation
+from src.services.fine_grained_feed import recallFineGrainedFeeds
+from src.utils.index import checkFigureAndRelationOwnership
 
 
 logger = logging.getLogger(__name__)
@@ -317,3 +319,184 @@ def getAllFigureAndRelations(
                 for fr in figure_and_relations
             ],
         }
+
+
+def _normalizeValue(value: Any) -> str:
+    if hasattr(value, "value"):
+        return str(value.value)
+    return str(value)
+
+
+def _normalizeTextList(values: list[Any]) -> list[str]:
+    normalized: list[str] = []
+    for item in values:
+        if item is None:
+            continue
+        text = str(item).strip()
+        if text != "":
+            normalized.append(text)
+    return normalized
+
+
+def _buildPersonaMarkdown(fr: FigureAndRelation) -> str:
+    field_map: list[tuple[str, str]] = [
+        ("figure_name", "姓名"),
+        ("figure_gender", "性别"),
+        ("figure_role", "角色"),
+        ("figure_mbti", "MBTI"),
+        ("figure_birthday", "生日"),
+        ("figure_occupation", "职业"),
+        ("figure_education", "教育背景"),
+        ("figure_residence", "常住地"),
+        ("figure_hometown", "家乡"),
+        ("figure_likes", "喜好"),
+        ("figure_dislikes", "不喜欢"),
+        ("figure_appearance", "外在特征"),
+        ("words_figure2user", "对用户常说的话"),
+        ("words_user2figure", "用户常对TA说的话"),
+        ("exact_relation", "精确关系"),
+        ("core_personality", "核心性格与价值观"),
+        ("core_interaction_style", "核心互动风格"),
+        ("core_procedural_info", "核心程序性知识"),
+        ("core_memory", "核心记忆"),
+    ]
+    lines = [f"# {fr.figure_name} 画像"]
+    for field_name, title in field_map:
+        value = getattr(fr, field_name, None)
+        if value is None:
+            continue
+        if isinstance(value, str):
+            text = value.strip()
+            if text == "":
+                continue
+            lines.append(f"- {title}: {text}")
+            continue
+        if isinstance(value, list):
+            text_list = _normalizeTextList(value)
+            if not text_list:
+                continue
+            lines.append(f"- {title}: {'；'.join(text_list)}")
+            continue
+        lines.append(f"- {title}: {_normalizeValue(value)}")
+    if len(lines) == 1:
+        lines.append("- 暂无有效画像信息")
+    return "\n".join(lines)
+
+
+def _buildRecalledMarkdown(title: str, items: list[dict[str, Any]]) -> str:
+    lines = [f"# {title}"]
+    if not items:
+        lines.append("- 无召回结果")
+        return "\n".join(lines)
+    for idx, item in enumerate(items, start=1):
+        feed = item.get("fine_grained_feed", {}) or {}
+        content = str(feed.get("content", "")).strip()
+        if content == "":
+            continue
+        sub_dimension = str(feed.get("sub_dimension", "")).strip()
+        confidence = feed.get("confidence")
+        confidence_text = (
+            _normalizeValue(confidence).strip() if confidence is not None else "unknown"
+        )
+        score = item.get("score", 0.0)
+        try:
+            score_text = f"{float(score):.4f}"
+        except (TypeError, ValueError):
+            score_text = "0.0000"
+        if sub_dimension != "":
+            lines.append(
+                f"- [{idx}] {sub_dimension}: "
+            )
+        else:
+            lines.append(
+                f"- [{idx}] "
+            )
+        lines.append(f"  {content}")
+    if len(lines) == 1:
+        lines.append("- 无召回结果")
+    return "\n".join(lines)
+
+
+async def getFRAllContext(
+    user_id: int,
+    fr_id: int,
+    query: str | None = None,
+) -> dict:
+    """
+    获取当前 FigureAndRelation 全部相关上下文
+    """
+    if not isinstance(user_id, int):
+        return {"status": -1, "message": "Invalid user_id"}
+    if not isinstance(fr_id, int):
+        return {"status": -2, "message": "Invalid fr_id"}
+    if not isinstance(query, str) and query is not None:
+        return {"status": -3, "message": "query must be a str"}
+    with session() as db:
+        fr = checkFigureAndRelationOwnership(db=db, user_id=user_id, fr_id=fr_id)
+        if fr is None:
+            return {"status": -4, "message": "FigureAndRelation not found"}
+    persona = _buildPersonaMarkdown(fr)
+
+    recalled_map = {
+        "recalled_personality": None,
+        "recalled_interaction_style": None,
+        "recalled_procedural_info": None,
+        "recalled_memory": None,
+    }
+    normalized_query = query.strip() if isinstance(query, str) else ""
+    if normalized_query != "":
+        dimension_conf = [
+            {
+                "result_key": "recalled_personality",
+                "title": "性格与价值观",
+                "dimension": FineGrainedFeedDimension.PERSONALITY,
+                "top_k": 20,
+            },
+            {
+                "result_key": "recalled_interaction_style",
+                "title": "互动风格",
+                "dimension": FineGrainedFeedDimension.INTERACTION_STYLE,
+                "top_k": 10,
+            },
+            {
+                "result_key": "recalled_procedural_info",
+                "title": "程序性知识",
+                "dimension": FineGrainedFeedDimension.PROCEDURAL_INFO,
+                "top_k": 5,
+            },
+            {
+                "result_key": "recalled_memory",
+                "title": "人生记忆与故事",
+                "dimension": FineGrainedFeedDimension.MEMORY,
+                "top_k": 5,
+            },
+        ]
+        for conf in dimension_conf:
+            recall_res = await recallFineGrainedFeeds(
+                user_id=user_id,
+                fr_id=fr_id,
+                query=normalized_query,
+                top_k=conf["top_k"],
+                scope=[conf["dimension"]],
+            )
+            if recall_res.get("status") != 200:
+                return {
+                    "status": -5,
+                    "message": f"Recall FineGrainedFeed failed: {recall_res.get('message', '')}",
+                }
+            items = recall_res.get("items", [])
+            recalled_map[conf["result_key"]] = (
+                _buildRecalledMarkdown(title=conf["title"], items=items)
+                if items
+                else None
+            )
+
+    return {
+        "status": 200,
+        "message": "Get FigureAndRelation all context success",
+        "persona": persona,
+        "recalled_personality": recalled_map["recalled_personality"],
+        "recalled_interaction_style": recalled_map["recalled_interaction_style"],
+        "recalled_procedural_info": recalled_map["recalled_procedural_info"],
+        "recalled_memory": recalled_map["recalled_memory"],
+    }

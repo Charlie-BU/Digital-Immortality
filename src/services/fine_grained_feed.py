@@ -1,63 +1,27 @@
 import logging
 import os
-from typing import Any, Literal
-
-from sqlalchemy.orm import Session
+from typing import List, Literal
 
 from src.agents.embedding import vectorizeText
-from src.database.enums import FineGrainedFeedConfidence, FineGrainedFeedDimension
+from src.database.enums import (
+    FineGrainedFeedConfidence,
+    FineGrainedFeedDimension,
+    OriginalSourceType,
+)
 from src.database.index import session
 from src.database.models import (
-    FigureAndRelation,
     FineGrainedFeed,
     FineGrainedFeedConflict,
     OriginalSource,
 )
+from src.utils.index import (
+    timeDecay,
+    checkFigureAndRelationOwnership,
+    checkOriginalSourceOwnership,
+)
 
 
 logger = logging.getLogger(__name__)
-
-
-def _checkFigureAndRelationOwnership(
-    db: Session, user_id: int, fr_id: int
-) -> FigureAndRelation | None:
-    """
-    FigureAndRelation 归属校验
-    """
-    return (
-        db.query(FigureAndRelation)
-        .filter(
-            FigureAndRelation.id == fr_id,
-            FigureAndRelation.user_id == user_id,
-            FigureAndRelation.is_deleted == False,
-        )
-        .first()
-    )
-
-
-def _checkOriginalSourceOwnership(
-    db,
-    user_id: int,
-    fr_id: int,
-    original_source_id: int,
-) -> OriginalSource | None:
-    """
-    OriginalSource 归属校验
-    """
-    original_source: OriginalSource | None = (
-        db.query(OriginalSource)
-        .filter(
-            OriginalSource.id == original_source_id,
-            OriginalSource.fr_id == fr_id,
-            OriginalSource.is_deleted == False,
-        )
-        .first()
-    )
-    if original_source is None:
-        return None
-    if original_source.figure_and_relation.user_id != user_id:
-        return None
-    return original_source
 
 
 def _checkFineGrainedFeedIds(
@@ -109,7 +73,7 @@ async def addFineGrainedFeed(
         return {"status": -7, "message": "Invalid sub_dimension"}
 
     with session() as db:
-        fr = _checkFigureAndRelationOwnership(
+        fr = checkFigureAndRelationOwnership(
             db=db,
             user_id=user_id,
             fr_id=fr_id,
@@ -117,7 +81,7 @@ async def addFineGrainedFeed(
         if fr is None:
             return {"status": -8, "message": "FigureAndRelation not found"}
 
-        original_source = _checkOriginalSourceOwnership(
+        original_source = checkOriginalSourceOwnership(
             db=db,
             user_id=user_id,
             fr_id=fr_id,
@@ -138,7 +102,9 @@ async def addFineGrainedFeed(
 
         # 向量化
         try:
-            vector = await vectorizeText(content)
+            vector = await vectorizeText(
+                f"{sub_dimension}{"\n" if sub_dimension else ""}{content}"
+            )
         except Exception as e:
             logger.error(f"Embedding generation failed: {str(e)}")
             return {"status": -10, "message": f"Embedding generation failed"}
@@ -175,7 +141,7 @@ def deleteFineGrainedFeed(
         return {"status": -3, "message": "Invalid fine_grained_feed_id"}
 
     with session() as db:
-        fr = _checkFigureAndRelationOwnership(db, user_id, fr_id)
+        fr = checkFigureAndRelationOwnership(db, user_id, fr_id)
         if fr is None:
             return {"status": -4, "message": "FigureAndRelation not found"}
         try:
@@ -224,11 +190,11 @@ async def updateFineGrainedFeed(
         return {"status": -6, "message": "Invalid new_sub_dimension"}
 
     with session() as db:
-        fr = _checkFigureAndRelationOwnership(db, user_id, fr_id)
+        fr = checkFigureAndRelationOwnership(db, user_id, fr_id)
         if fr is None:
             return {"status": -7, "message": "FigureAndRelation not found"}
 
-        original_source = _checkOriginalSourceOwnership(
+        original_source = checkOriginalSourceOwnership(
             db=db,
             user_id=user_id,
             fr_id=fr_id,
@@ -292,7 +258,7 @@ def getFineGrainedFeed(
         return {"status": -3, "message": "Invalid fine_grained_feed_id"}
 
     with session() as db:
-        fr = _checkFigureAndRelationOwnership(db, user_id, fr_id)
+        fr = checkFigureAndRelationOwnership(db, user_id, fr_id)
         if fr is None:
             return {"status": -4, "message": "FigureAndRelation not found"}
 
@@ -329,7 +295,7 @@ def getAllFineGrainedFeed(
         return {"status": -2, "message": "Invalid fr_id"}
 
     with session() as db:
-        fr = _checkFigureAndRelationOwnership(db, user_id, fr_id)
+        fr = checkFigureAndRelationOwnership(db, user_id, fr_id)
         if fr is None:
             return {"status": -3, "message": "FigureAndRelation not found"}
 
@@ -362,9 +328,104 @@ def getAllFineGrainedFeed(
         }
 
 
+async def recallFineGrainedFeeds(
+    user_id: int,
+    fr_id: int,
+    query: str,
+    top_k: int,
+    scope: List[FineGrainedFeedDimension] | Literal["all"] = "all",
+) -> dict:
+    """
+    召回细粒度信息
+    """
+    if not isinstance(user_id, int):
+        return {"status": -1, "message": "Invalid user_id"}
+    if not isinstance(fr_id, int):
+        return {"status": -2, "message": "Invalid fr_id"}
+    if not query or query.strip() == "":
+        return {"status": -3, "message": "Query is empty"}
+    if not isinstance(top_k, int) or top_k <= 0:
+        return {"status": -4, "message": "Top_k must be greater than 0"}
+    if scope != "all" and (
+        not isinstance(scope, list)
+        or not scope
+        or not all(isinstance(item, FineGrainedFeedDimension) for item in scope)
+    ):
+        return {"status": -9, "message": "Invalid scope"}
+
+    try:
+        vector = await vectorizeText(query.strip())
+    except Exception as e:
+        logger.error(f"Embedding failed: {str(e)}")
+        return {"status": -5, "message": "Embedding failed"}
+    if not isinstance(vector, list) or not vector:
+        return {"status": -6, "message": "Invalid embedding result"}
+
+    distance = FineGrainedFeed.embedding.cosine_distance(vector)
+    confidence_weight_map = {
+        FineGrainedFeedConfidence.VERBATIM: 1.0,
+        FineGrainedFeedConfidence.ARTIFACT: 0.85,
+        FineGrainedFeedConfidence.IMPRESSION: 0.7,
+    }
+
+    with session() as db:
+        fr = checkFigureAndRelationOwnership(db, user_id, fr_id)
+        if fr is None:
+            return {"status": -7, "message": "FigureAndRelation not found"}
+        try:
+            db_query = db.query(FineGrainedFeed, distance.label("distance")).filter(
+                FineGrainedFeed.fr_id == fr_id,
+                FineGrainedFeed.is_deleted == False,
+            )
+            if scope != "all":
+                db_query = db_query.filter(FineGrainedFeed.dimension.in_(scope))
+            candidates: list[tuple[FineGrainedFeed, float]] = (
+                db_query.order_by(distance.asc())
+                .limit(int(os.getenv("VECTOR_CANDIDATES")) or 100)
+                .all()
+            )
+        except Exception as e:
+            logger.error(f"Recall FineGrainedFeed failed: {str(e)}")
+            return {"status": -8, "message": "Recall FineGrainedFeed failed"}
+
+        results = []
+        for fine_grained_feed, dist in candidates:
+            semantic_score = max(0.0, min(1.0, 1 - float(dist) / 2))
+            confidence_weight = confidence_weight_map.get(
+                fine_grained_feed.confidence, 0.7
+            )
+            created_at = fine_grained_feed.created_at
+
+            decay = timeDecay(created_at) if created_at else 1.0
+            raw_score = semantic_score * 0.8 + confidence_weight * 0.2
+            score = raw_score * decay
+
+            results.append(
+                {
+                    "distance": float(dist),
+                    "score": score,
+                    "semantic_score": semantic_score,
+                    "confidence_weight": confidence_weight,
+                    "time_decay": decay,
+                    "fine_grained_feed": fine_grained_feed.toJson(
+                        exclude=["embedding", "embedding_model_name"]
+                    ),
+                }
+            )
+
+        results.sort(key=lambda x: x["score"], reverse=True)
+        results = results[:top_k]
+        return {
+            "status": 200,
+            "message": "Recall success",
+            "items": results,
+        }
+
+
 def addOriginalSource(
     user_id: int,
     fr_id: int,
+    type: OriginalSourceType,
     confidence: FineGrainedFeedConfidence,
     included_dimensions: list[FineGrainedFeedDimension],
     content: str,
@@ -377,8 +438,10 @@ def addOriginalSource(
         return {"status": -1, "message": "Invalid user_id"}
     if not isinstance(fr_id, int):
         return {"status": -2, "message": "Invalid fr_id"}
+    if not isinstance(type, OriginalSourceType):
+        return {"status": -3, "message": "Invalid type"}
     if not isinstance(confidence, FineGrainedFeedConfidence):
-        return {"status": -3, "message": "Invalid confidence"}
+        return {"status": -4, "message": "Invalid confidence"}
     if (
         not isinstance(included_dimensions, list)
         or not included_dimensions
@@ -386,19 +449,20 @@ def addOriginalSource(
             isinstance(item, FineGrainedFeedDimension) for item in included_dimensions
         )
     ):
-        return {"status": -4, "message": "Invalid included_dimensions"}
+        return {"status": -5, "message": "Invalid included_dimensions"}
     if not content or content.strip() == "":
-        return {"status": -5, "message": "content cannot be empty"}
+        return {"status": -6, "message": "content cannot be empty"}
     if approx_date is not None and not isinstance(approx_date, str):
-        return {"status": -6, "message": "Invalid approx_date"}
+        return {"status": -7, "message": "Invalid approx_date"}
 
     with session() as db:
-        fr = _checkFigureAndRelationOwnership(db, user_id, fr_id)
+        fr = checkFigureAndRelationOwnership(db, user_id, fr_id)
         if fr is None:
-            return {"status": -7, "message": "FigureAndRelation not found"}
+            return {"status": -8, "message": "FigureAndRelation not found"}
 
         original_source = OriginalSource(
             fr_id=fr_id,
+            type=type,
             approx_date=approx_date if approx_date is not None else None,
             confidence=confidence,
             included_dimensions=included_dimensions,
@@ -407,12 +471,17 @@ def addOriginalSource(
         try:
             db.add(original_source)
             db.commit()
+            db.refresh(original_source)
         except Exception as e:
             db.rollback()
             logger.error(f"Add OriginalSource failed: {str(e)}")
-            return {"status": -8, "message": "Add OriginalSource failed"}
+            return {"status": -9, "message": "Add OriginalSource failed"}
 
-        return {"status": 200, "message": "Add OriginalSource success"}
+        return {
+            "status": 200,
+            "message": "Add OriginalSource success",
+            "original_source_id": original_source.id,
+        }
 
 
 def deleteOriginalSource(
@@ -431,7 +500,7 @@ def deleteOriginalSource(
         return {"status": -3, "message": "Invalid original_source_id"}
 
     with session() as db:
-        fr = _checkFigureAndRelationOwnership(db, user_id, fr_id)
+        fr = checkFigureAndRelationOwnership(db, user_id, fr_id)
         if fr is None:
             return {"status": -4, "message": "FigureAndRelation not found"}
 
@@ -473,7 +542,7 @@ def getOriginalSource(
         return {"status": -3, "message": "Invalid original_source_id"}
 
     with session() as db:
-        fr = _checkFigureAndRelationOwnership(db, user_id, fr_id)
+        fr = checkFigureAndRelationOwnership(db, user_id, fr_id)
         if fr is None:
             return {"status": -4, "message": "FigureAndRelation not found"}
 
@@ -508,7 +577,7 @@ def getAllOriginalSource(
         return {"status": -2, "message": "Invalid fr_id"}
 
     with session() as db:
-        fr = _checkFigureAndRelationOwnership(db, user_id, fr_id)
+        fr = checkFigureAndRelationOwnership(db, user_id, fr_id)
         if fr is None:
             return {"status": -3, "message": "FigureAndRelation not found"}
 
@@ -571,7 +640,7 @@ def addFineGrainedFeedConflict(
         return {"status": -7, "message": "Invalid resolution"}
 
     with session() as db:
-        fr = _checkFigureAndRelationOwnership(db, user_id, fr_id)
+        fr = checkFigureAndRelationOwnership(db, user_id, fr_id)
         if fr is None:
             return {"status": -8, "message": "FigureAndRelation not found"}
         if not _checkFineGrainedFeedIds(db, fr_id, feed_ids):
@@ -613,7 +682,7 @@ def hardDeleteFineGrainedFeedConflict(
         return {"status": -3, "message": "Invalid fine_grained_feed_conflict_id"}
 
     with session() as db:
-        fr = _checkFigureAndRelationOwnership(db, user_id, fr_id)
+        fr = checkFigureAndRelationOwnership(db, user_id, fr_id)
         if fr is None:
             return {"status": -4, "message": "FigureAndRelation not found"}
 
@@ -654,7 +723,7 @@ def resolveFineGrainedFeedConflict(
         return {"status": -3, "message": "Invalid fine_grained_feed_conflict_id"}
 
     with session() as db:
-        fr = _checkFigureAndRelationOwnership(db, user_id, fr_id)
+        fr = checkFigureAndRelationOwnership(db, user_id, fr_id)
         if fr is None:
             return {"status": -4, "message": "FigureAndRelation not found"}
 
@@ -701,7 +770,7 @@ def getFineGrainedFeedConflict(
         return {"status": -3, "message": "Invalid fine_grained_feed_conflict_id"}
 
     with session() as db:
-        fr = _checkFigureAndRelationOwnership(db, user_id, fr_id)
+        fr = checkFigureAndRelationOwnership(db, user_id, fr_id)
         if fr is None:
             return {"status": -4, "message": "FigureAndRelation not found"}
 
@@ -736,7 +805,7 @@ def getAllFineGrainedFeedConflict(
         return {"status": -2, "message": "Invalid fr_id"}
 
     with session() as db:
-        fr = _checkFigureAndRelationOwnership(db, user_id, fr_id)
+        fr = checkFigureAndRelationOwnership(db, user_id, fr_id)
         if fr is None:
             return {"status": -3, "message": "FigureAndRelation not found"}
 
