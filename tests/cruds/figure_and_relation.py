@@ -1,8 +1,10 @@
+import asyncio
 from src.database.enums import FigureRole, Gender, MBTI
 from src.services.figure_and_relation import (
     addFigureAndRelation,
     deleteFigureAndRelation,
     getAllFigureAndRelations,
+    getFRAllContext,
     getFigureAndRelation,
     updateFigureAndRelation,
 )
@@ -62,5 +64,11 @@ def testDeleteFigureAndRelation(fr_id: int):
     return res
 
 
+async def testGetFRAllContext(query: str | None = None):
+    res = await getFRAllContext(user_id=1, fr_id=1, query=query)
+    return res
+
+
 if __name__ == "__main__":
-    print("testAddFigureAndRelation:", testAddFigureAndRelation())
+    # print("testAddFigureAndRelation:", testAddFigureAndRelation())
+    print("testGetFRAllContext:", asyncio.run(testGetFRAllContext("社交")))
