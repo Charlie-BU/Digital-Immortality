@@ -10,69 +10,76 @@ from src.utils.index import checkFigureAndRelationOwnership
 
 logger = logging.getLogger(__name__)
 
+fr_allowed_fields = {
+    "figure_name",
+    "figure_gender",
+    "figure_role",
+    "figure_mbti",
+    "figure_birthday",
+    "figure_occupation",
+    "figure_education",
+    "figure_residence",
+    "figure_hometown",
+    "figure_likes",
+    "figure_dislikes",
+    "figure_appearance",
+    "words_figure2user",
+    "words_user2figure",
+    "exact_relation",
+    "core_personality",
+    "core_interaction_style",
+    "core_procedural_info",
+    "core_memory",
+}
+fr_non_nullable_fields = {
+    "figure_name",
+    "figure_gender",
+    "figure_role",
+    "figure_likes",
+    "figure_dislikes",
+    "figure_appearance",
+    "words_figure2user",
+    "words_user2figure",
+    "exact_relation",
+    "core_personality",
+    "core_interaction_style",
+    "core_procedural_info",
+    "core_memory",
+}
+fr_list_fields = {
+    "figure_likes",
+    "figure_dislikes",
+    "figure_appearance",
+    "words_figure2user",
+    "words_user2figure",
+}
+
+
+def fr_string_fields(detailed: bool = False):
+    fields = {
+        "figure_birthday",
+        "figure_occupation",
+        "figure_education",
+        "figure_residence",
+        "figure_hometown",
+        "exact_relation",
+    }
+    if not detailed:
+        return fields
+    fields.add("figure_name")
+    fields.add("core_personality")
+    fields.add("core_interaction_style")
+    fields.add("core_procedural_info")
+    fields.add("core_memory")
+    return fields
+
 
 def _frUpdateFieldCheck(fr_body: dict[str, Any]) -> dict[str, Any]:
     """
     校验 FigureAndRelation 更新字段是否合法
     """
-    allowed_fields = {
-        "figure_name",
-        "figure_gender",
-        "figure_role",
-        "figure_mbti",
-        "figure_birthday",
-        "figure_occupation",
-        "figure_education",
-        "figure_residence",
-        "figure_hometown",
-        "figure_likes",
-        "figure_dislikes",
-        "figure_appearance",
-        "words_figure2user",
-        "words_user2figure",
-        "exact_relation",
-        "core_personality",
-        "core_interaction_style",
-        "core_procedural_info",
-        "core_memory",
-    }
-    non_nullable_fields = {
-        "figure_name",
-        "figure_gender",
-        "figure_role",
-        "figure_likes",
-        "figure_dislikes",
-        "figure_appearance",
-        "words_figure2user",
-        "words_user2figure",
-        "exact_relation",
-        "core_personality",
-        "core_interaction_style",
-        "core_procedural_info",
-        "core_memory",
-    }
-    list_fields = {
-        "figure_likes",
-        "figure_dislikes",
-        "figure_appearance",
-        "words_figure2user",
-        "words_user2figure",
-    }
-    string_fields = {
-        "figure_name",
-        "figure_birthday",
-        "figure_occupation",
-        "figure_education",
-        "figure_residence",
-        "figure_hometown",
-        "exact_relation",
-        "core_personality",
-        "core_interaction_style",
-        "core_procedural_info",
-        "core_memory",
-    }
 
-    invalid_fields = [field for field in fr_body if field not in allowed_fields]
+    invalid_fields = [field for field in fr_body if field not in fr_allowed_fields]
     if invalid_fields:
         raise ValueError(f"Invalid fields: {', '.join(sorted(invalid_fields))}")
 
@@ -80,7 +87,7 @@ def _frUpdateFieldCheck(fr_body: dict[str, Any]) -> dict[str, Any]:
     for field, value in fr_body.items():
         # 格式 / 类型校验
         # 非 nullable 字段
-        if field in non_nullable_fields:
+        if field in fr_non_nullable_fields:
             if (
                 not value
                 or (isinstance(value, str) and value.strip() == "")
@@ -99,11 +106,11 @@ def _frUpdateFieldCheck(fr_body: dict[str, Any]) -> dict[str, Any]:
             if value is not None and not isinstance(value, MBTI):  # 允许 value 为 None
                 raise ValueError("Invalid figure MBTI")
         # 数组类型
-        elif field in list_fields:
+        elif field in fr_list_fields:
             if not isinstance(value, list):
                 raise ValueError(f"{field} must be a list")
         # 字符串类型
-        elif field in string_fields:
+        elif field in fr_string_fields(detailed=True):
             if not isinstance(value, str):
                 raise ValueError(f"{field} must be a string")
 
@@ -404,13 +411,9 @@ def _buildRecalledMarkdown(title: str, items: list[dict[str, Any]]) -> str:
         except (TypeError, ValueError):
             score_text = "0.0000"
         if sub_dimension != "":
-            lines.append(
-                f"- [{idx}] {sub_dimension}: "
-            )
+            lines.append(f"- [{idx}] {sub_dimension}: ")
         else:
-            lines.append(
-                f"- [{idx}] "
-            )
+            lines.append(f"- [{idx}] ")
         lines.append(f"  {content}")
     if len(lines) == 1:
         lines.append("- 无召回结果")

@@ -2,7 +2,12 @@ from langgraph.graph import StateGraph, START, END
 from langgraph.graph.state import CompiledStateGraph
 import logging
 
-from src.agents.graphs.FRBuildingGraph.nodes import nodeLoadFR, nodePersistOriginalSource, nodePreprocessInput
+from src.agents.graphs.FRBuildingGraph.nodes import (
+    nodeExtractFRIntrinsicCandidates,
+    nodeLoadFR,
+    nodePersistOriginalSource,
+    nodePreprocessInput,
+)
 from src.agents.graphs.FRBuildingGraph.state import (
     FRBuildingGraphInput,
     FRBuildingGraphOutput,
@@ -22,11 +27,13 @@ def buildFRBuildingGraph() -> CompiledStateGraph:
     graph.add_node("nodeLoadFR", nodeLoadFR)
     graph.add_node("nodePreprocessInput", nodePreprocessInput)
     graph.add_node("nodePersistOriginalSource", nodePersistOriginalSource)
+    graph.add_node("nodeExtractFRIntrinsicCandidates", nodeExtractFRIntrinsicCandidates)
 
     graph.add_edge(START, "nodeLoadFR")
     graph.add_edge("nodeLoadFR", "nodePreprocessInput")
     graph.add_edge("nodePreprocessInput", "nodePersistOriginalSource")
-    graph.add_edge("nodePersistOriginalSource", END)
+    graph.add_edge("nodePersistOriginalSource", "nodeExtractFRIntrinsicCandidates")
+    graph.add_edge("nodeExtractFRIntrinsicCandidates", END)
 
     return graph.compile()
 

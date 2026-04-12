@@ -10,16 +10,23 @@ from src.database.enums import (
     FigureRole,
     FineGrainedFeedConfidence,
     FineGrainedFeedDimension,
+    MBTI,
     OriginalSourceType,
     parseEnum,
 )
 from src.database.index import session
+from src.services.figure_and_relation import (
+    fr_allowed_fields,
+    fr_list_fields,
+    fr_string_fields,
+)
 from src.services.fine_grained_feed import addOriginalSource
-from src.utils.index import checkFigureAndRelationOwnership
+from src.utils.index import checkFigureAndRelationOwnership, cleanList, normalizeText
 
 logger = logging.getLogger(__name__)
 
 
+# 步骤 1-3
 def nodeLoadFR(state: FRBuildingGraphState) -> dict:
     """
     加载当前 figure_and_relation 和 figure_role
@@ -52,6 +59,7 @@ def nodeLoadFR(state: FRBuildingGraphState) -> dict:
         }
 
 
+# 步骤 4
 async def nodePreprocessInput(state: FRBuildingGraphState) -> dict:
     """
     预处理 raw_content 和 raw_images（如有）
@@ -77,23 +85,28 @@ async def nodePreprocessInput(state: FRBuildingGraphState) -> dict:
 
     # LLM 预处理
     llm = prepareLLM(
-        "DOUBAO_2_0_MINI", options={"temperature": 0, "reasoning_effort": "low"}
+        "DOUBAO_2_0_MINI",
+        options={
+            "temperature": 0,
+            "reasoning_effort": "low",
+        },
     )
-    FR_BUILDING_PREPROCESS_SYSTEM_PROMPT = await getPrompt(
-        os.getenv("FR_BUILDING_PREPROCESS_SYSTEM_PROMPT")
+    FR_BUILDING_PREPROCESS = await getPrompt(os.getenv("FR_BUILDING_PREPROCESS"))
+    # 提示词兜底
+    if not FR_BUILDING_PREPROCESS:
+        logger.error("FR preprocess prompt is empty")
+        raise ValueError("FR preprocess prompt is empty")
+
+    user_prompt = (
+        f"[figure_role]:\n{state['figure_role'].value}\n\n[raw_content]:\n{raw_content}"
     )
-    FR_BUILDING_PREPROCESS_INPUT = await getPrompt(
-        os.getenv("FR_BUILDING_PREPROCESS_INPUT"),
-        {"figure_role": state["figure_role"].value, "raw_content": raw_content},
-    )
-    user_prompt = FR_BUILDING_PREPROCESS_INPUT
     if raw_images:
-        user_prompt = [{"type": "text", "text": FR_BUILDING_PREPROCESS_INPUT}] + [
+        user_prompt = [{"type": "text", "text": user_prompt}] + [
             {"type": "image_url", "image_url": {"url": url}} for url in raw_images
         ]
 
     messages = [
-        SystemMessage(content=FR_BUILDING_PREPROCESS_SYSTEM_PROMPT),
+        SystemMessage(content=FR_BUILDING_PREPROCESS),
         HumanMessage(content=user_prompt),
     ]
     response = await llm.ainvoke(messages)
@@ -116,12 +129,8 @@ async def nodePreprocessInput(state: FRBuildingGraphState) -> dict:
         warning = "included_dimensions is empty, fallback to [other]"
         logger.warning(warning)
         warnings = warnings + [warning]
-    if not metadata.get("approx_date"):
-        warning = "approx_date is missing"
-        logger.warning(warning)
-        warnings = warnings + [warning]
 
-    original_source_draft = {
+    original_source = {
         "content": cleaned_content,
         "type": parseEnum(OriginalSourceType, metadata.get("original_source_type")),
         "confidence": parseEnum(
@@ -141,12 +150,12 @@ async def nodePreprocessInput(state: FRBuildingGraphState) -> dict:
         {
             "step": "nodePreprocessInput",
             "status": "ok",
-            "detail": "Input preprocessed and original source draft prepared",
+            "detail": "Input preprocessed and original source prepared",
             "data": {
-                "type": original_source_draft["type"].value,
-                "confidence": original_source_draft["confidence"].value,
+                "type": original_source["type"].value,
+                "confidence": original_source["confidence"].value,
                 "included_dimensions": [
-                    dim.value for dim in original_source_draft["included_dimensions"]
+                    dim.value for dim in original_source["included_dimensions"]
                 ],
                 "has_raw_images": len(raw_images) > 0,
                 "raw_content_length": len(raw_content),
@@ -156,7 +165,7 @@ async def nodePreprocessInput(state: FRBuildingGraphState) -> dict:
     ]
 
     return {
-        "original_source_draft": original_source_draft,
+        "original_source": original_source,
         "warnings": warnings,
         "logs": logs,
     }
@@ -166,11 +175,11 @@ def nodePersistOriginalSource(state: FRBuildingGraphState) -> dict:
     """
     original_source 落库
     """
-    original_source_draft = state["original_source_draft"]
+    original_source = state["original_source"]
     res = addOriginalSource(
         user_id=state["request"]["user_id"],
         fr_id=state["request"]["fr_id"],
-        **original_source_draft,
+        **original_source,
     )
     if res["status"] != 200:
         logger.error(res.get("message", "Add original source failed"))
@@ -199,3 +208,258 @@ def nodePersistOriginalSource(state: FRBuildingGraphState) -> dict:
         "warnings": warnings,
         "logs": logs,
     }
+
+
+# 步骤 5
+async def nodeExtractFRIntrinsicCandidates(state: FRBuildingGraphState) -> dict:
+    """
+    从 original_source 中提取 FR 内在字段
+    """
+    warnings = state.get("warnings") or []
+    logs = state.get("logs") or []
+
+    original_source = state.get("original_source") or {}
+    original_source_content = (original_source.get("content") or "").strip()
+    if original_source_content == "":
+        warning = "original_source.content is empty"
+        logger.warning(warning)
+        warnings = warnings + [warning]
+        raise ValueError(f"FR intrinsic extraction failed, {warning}")
+
+    FR_BUILDING_EXTRACT_FR_INTRINSIC_CANDIDATES = await getPrompt(
+        os.getenv("FR_BUILDING_EXTRACT_FR_INTRINSIC_CANDIDATES")
+    )
+    # 提示词兜底
+    if not FR_BUILDING_EXTRACT_FR_INTRINSIC_CANDIDATES:
+        logger.error("FR intrinsic extraction prompt is empty")
+        raise ValueError("FR intrinsic extraction prompt is empty")
+
+    user_prompt = f"[figure_role]:\n{state['figure_role'].value}\n\n[original_source_content]:\n{original_source_content}"
+    llm = prepareLLM(
+        "DOUBAO_2_0_LITE",
+        options={
+            "temperature": 0,
+            "reasoning_effort": "low",
+        },
+    )
+    response = await llm.ainvoke(
+        [
+            SystemMessage(content=FR_BUILDING_EXTRACT_FR_INTRINSIC_CANDIDATES),
+            HumanMessage(content=user_prompt),
+        ]
+    )
+
+    try:
+        parsed_res = json.loads(response.content)
+    except json.JSONDecodeError:
+        logger.error("LLM response is not valid JSON")
+        raise ValueError("LLM response is not valid JSON")
+
+    raw_candidates = parsed_res.get("fr_intrinsic_candidates")
+
+    if not isinstance(raw_candidates, dict):
+        warning = "fr_intrinsic_candidates is not a dict, fallback to empty updates"
+        logger.warning(warning)
+        warnings = warnings + [warning]
+        raw_candidates = {}
+
+    # 将 raw_candidates 中的字段转换为 FR 合法字段类型
+    fr_intrinsic_updates = {}
+    ignored_fields = []  # 非 FR 合法字段，用于日志记录
+    for field, value in raw_candidates.items():
+        if field not in fr_allowed_fields:
+            ignored_fields.append(field)
+            continue
+        if value is None:
+            continue
+
+        if field == "figure_mbti":
+            if isinstance(value, str) and value.strip() != "":
+                try:
+                    fr_intrinsic_updates[field] = parseEnum(MBTI, value.strip().upper())
+                except Exception:
+                    warning = f"Invalid figure_mbti extracted: {value}"
+                    logger.warning(warning)
+                    warnings = warnings + [warning]
+            continue
+
+        if field in fr_list_fields:
+            normalized_list = []
+            if isinstance(value, list):
+                normalized_list = [
+                    item.strip()
+                    for item in value
+                    if isinstance(item, str) and item.strip() != ""
+                ]
+            elif isinstance(value, str) and value.strip() != "":
+                normalized_list = [value.strip()]
+            else:
+                warning = f"Invalid list field extracted for {field}"
+                logger.warning(warning)
+                warnings = warnings + [warning]
+            if normalized_list:
+                # 去重（是不是有点过度设计了？）
+                seen = set()
+                deduped = []
+                for item in normalized_list:
+                    if item in seen:
+                        continue
+                    seen.add(item)
+                    deduped.append(item)
+                fr_intrinsic_updates[field] = deduped
+            continue
+
+        if field in fr_string_fields(detailed=False):
+            if isinstance(value, str):
+                normalized_value = value.strip()
+                if normalized_value != "":
+                    fr_intrinsic_updates[field] = normalized_value
+            else:
+                warning = f"Invalid string field extracted for {field}"
+                logger.warning(warning)
+                warnings = warnings + [warning]
+
+    logs += [
+        {
+            "step": "nodeExtractFRIntrinsicCandidates",
+            "status": "ok",
+            "detail": "FR intrinsic candidates extracted and normalized",
+            "data": {
+                "extracted_fields": sorted(fr_intrinsic_updates.keys()),
+                "extracted_count": len(fr_intrinsic_updates),
+                "ignored_fields": sorted(ignored_fields),
+            },
+        }
+    ]
+
+    logger.info(json.dumps(fr_intrinsic_updates, ensure_ascii=False, indent=2))
+    return {
+        "fr_intrinsic_updates": fr_intrinsic_updates,
+        "warnings": warnings,
+        "logs": logs,
+    }
+
+
+async def nodePlanFRIntrinsicUpdate(state: FRBuildingGraphState) -> dict:
+    """
+    FR 内在字段对照更新
+    """
+    warnings = state.get("warnings") or []
+    logs = state.get("logs") or []
+    figure_and_relation = state.get("figure_and_relation") or {}
+    extracted_candidates = state.get("fr_intrinsic_updates") or {}
+
+    if not isinstance(extracted_candidates, dict) or len(extracted_candidates) == 0:
+        logs += [
+            {
+                "step": "nodePlanFRIntrinsicUpdate",
+                "status": "skip",
+                "detail": "No extracted FR intrinsic candidates to plan",
+                "data": {},
+            }
+        ]
+        return {"fr_intrinsic_updates": {}, "warnings": warnings, "logs": logs}
+
+    def _normalizeMBTI(value: MBTI | str) -> MBTI | None:
+        """
+        归一化 MBTI 字段
+        """
+        if isinstance(value, MBTI):
+            return value
+        if isinstance(value, str) and value.strip() != "":
+            try:
+                return parseEnum(MBTI, value.strip().upper())
+            except Exception:
+                return None
+        return None
+
+    planned_updates = {}
+    plan_actions = []  # 用于日志记录
+
+    # 逐一处理每个字段
+    for field, new_value in extracted_candidates.items():
+        if field == "figure_mbti":
+            # 无需模型对照
+            existing_mbti = _normalizeMBTI(figure_and_relation.get(field))
+            new_mbti = _normalizeMBTI(new_value)
+            if new_mbti is None:
+                continue
+            if existing_mbti is None:
+                planned_updates[field] = new_mbti
+                plan_actions.append({"field": field, "action": "fill_empty"})
+                continue
+            if existing_mbti == new_mbti:
+                plan_actions.append({"field": field, "action": "skip_same"})
+                continue
+            # MBTI 变化：记录后直接替换
+            planned_updates[field] = new_mbti
+            warning = (
+                f"FR intrinsic conflict on {field}, replace "
+                f"{existing_mbti.value} -> {new_mbti.value}"
+            )
+            logger.warning(warning)
+            warnings = warnings + [warning]
+            plan_actions.append({"field": field, "action": "conflict_replace"})
+            continue
+
+        if field in fr_list_fields:
+            # todo: 模型判断
+            existing_list = cleanList(figure_and_relation.get(field))
+            new_list = cleanList(new_value)
+            if len(new_list) == 0:
+                continue
+            if len(existing_list) == 0:
+                planned_updates[field] = new_list
+                plan_actions.append({"field": field, "action": "fill_empty"})
+                continue
+            existing_set = set(existing_list)
+            if all(item in existing_set for item in new_list):
+                plan_actions.append({"field": field, "action": "skip_subset"})
+                continue
+            merged = existing_list + [
+                item for item in new_list if item not in existing_set
+            ]
+            planned_updates[field] = merged
+            plan_actions.append({"field": field, "action": "merge_append"})
+            continue
+
+        if field in fr_string_fields(detailed=False):
+            existing_text = normalizeText(figure_and_relation.get(field))
+            new_text = normalizeText(new_value)
+            if new_text == "":
+                continue
+            if existing_text == "":
+                planned_updates[field] = new_text
+                plan_actions.append({"field": field, "action": "fill_empty"})
+                continue
+            # todo: 模型判断
+            if new_text == existing_text:
+                plan_actions.append({"field": field, "action": "skip_same"})
+                continue
+            if existing_text in new_text:
+                planned_updates[field] = new_text
+                plan_actions.append({"field": field, "action": "merge_expand"})
+                continue
+            if new_text in existing_text:
+                plan_actions.append({"field": field, "action": "skip_substring"})
+                continue
+            planned_updates[field] = new_text
+            warning = f"FR intrinsic conflict on {field}, replace existing value"
+            logger.warning(warning)
+            warnings = warnings + [warning]
+            plan_actions.append({"field": field, "action": "conflict_replace"})
+
+    logs += [
+        {
+            "step": "nodePlanFRIntrinsicUpdate",
+            "status": "ok",
+            "detail": "FR intrinsic update planned",
+            "data": {
+                "planned_fields": sorted(planned_updates.keys()),
+                "planned_count": len(planned_updates),
+                "plan_actions": plan_actions,
+            },
+        }
+    ]
+
+    return {"fr_intrinsic_updates": planned_updates, "warnings": warnings, "logs": logs}

@@ -16,7 +16,7 @@ class Request(TypedDict, total=False):
     raw_images: list[str] | None    # 原始图片url
 
 
-class OriginalSourceDraft(TypedDict, total=False):
+class OriginalSourceTemp(TypedDict, total=False):
     type: OriginalSourceType
     confidence: FineGrainedFeedConfidence
     included_dimensions: list[FineGrainedFeedDimension]
@@ -77,7 +77,7 @@ class FRBuildingGraphState(TypedDict, total=False):
     figure_role: FigureRole
     role_recipe_path: str
     conflict_recipe_path: str
-    original_source_draft: OriginalSourceDraft
+    original_source: OriginalSourceTemp
     original_source_id: int
     # original_source: dict[str, Any]
     fr_intrinsic_updates: FRIntrinsicUpdates
