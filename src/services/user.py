@@ -192,7 +192,7 @@ def userRegister(
                 "message": "Username or email already registered",
             }
         try:
-            gender = parseEnum(Gender, gender)
+            gender: Gender = parseEnum(Gender, gender)
         except ValueError:
             return {"status": -6, "message": "Invalid gender"}
         user = User(

@@ -1,4 +1,5 @@
 import enum
+from typing import Any
 
 
 class Gender(enum.Enum):
@@ -90,7 +91,9 @@ class OriginalSourceType(enum.Enum):
     # FigureRole 自己
     SELF_LONG_FORM = "self_long_form"  # 自己写的长文（博客、日记、笔记）
     SELF_CHAT_MESSAGE = "self_chat_message"  # 和他人聊天记录（自己发出的消息）
-    SELF_SOCIAL_EXPRESSION = "self_social_expression"  # 社交表达（公开的表达、社交媒体发帖）
+    SELF_SOCIAL_EXPRESSION = (
+        "self_social_expression"  # 社交表达（公开的表达、社交媒体发帖）
+    )
     SELF_ARTIFACT = "self_artifact"  # 创作物
 
     # FigureRole 公众人物
@@ -98,7 +101,9 @@ class OriginalSourceType(enum.Enum):
     PUBLIC_FIGURE_INTERVIEW_SPEECH_TRANSCRIPT = (
         "public_figure_interview_speech_transcript"  # 采访/演讲文字
     )
-    PUBLIC_FIGURE_SOCIAL_EXPRESSION = "public_figure_social_expression"  # 社交表达（公开的表达、社交媒体发帖）
+    PUBLIC_FIGURE_SOCIAL_EXPRESSION = (
+        "public_figure_social_expression"  # 社交表达（公开的表达、社交媒体发帖）
+    )
     PUBLIC_FIGURE_NEWS_REPORT = "public_figure_news_report"  # 新闻报道
     PUBLIC_FIGURE_ARTIFACT = "public_figure_artifact"  # 创作物（代码、设计稿等）
 
@@ -108,7 +113,10 @@ class AnalysisType(enum.Enum):
     NARRATIVE = "narrative"  # 自然语言叙述分析
 
 
-def parseEnum(enum_cls, value: str):
+def parseEnum(enum_cls, value: str) -> enum.Enum:
+    """
+    解析枚举键 / 值，返回枚举实例
+    """
     if value in enum_cls.__members__:  # value为枚举键
         return enum_cls[value]
     return enum_cls(value)  # value为枚举值
