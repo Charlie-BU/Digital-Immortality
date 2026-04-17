@@ -3,76 +3,86 @@ from typing import Any
 
 from src.database.enums import FigureRole, FineGrainedFeedDimension, Gender, MBTI
 from src.database.index import session
-from src.database.models import FigureAndRelation
+from src.database.models import (
+    FRBuildingGraphReport,
+    FROverallUpdateLog,
+    FigureAndRelation,
+)
 from src.services.fine_grained_feed import recallFineGrainedFeeds
-from src.utils.index import checkFigureAndRelationOwnership
+from src.utils.index import checkFigureAndRelationOwnership, serialize2String
 
 
 logger = logging.getLogger(__name__)
+
+fr_allowed_fields = {
+    "figure_name",
+    "figure_gender",
+    "figure_role",
+    "figure_mbti",
+    "figure_birthday",
+    "figure_occupation",
+    "figure_education",
+    "figure_residence",
+    "figure_hometown",
+    "figure_likes",
+    "figure_dislikes",
+    "figure_appearance",
+    "words_figure2user",
+    "words_user2figure",
+    "exact_relation",
+    "core_personality",
+    "core_interaction_style",
+    "core_procedural_info",
+    "core_memory",
+}
+fr_non_nullable_fields = {
+    "figure_name",
+    "figure_gender",
+    "figure_role",
+    "figure_likes",
+    "figure_dislikes",
+    "words_figure2user",
+    "words_user2figure",
+    "exact_relation",
+    "core_personality",
+    "core_interaction_style",
+    "core_procedural_info",
+    "core_memory",
+}
+fr_list_fields = {
+    "figure_likes",
+    "figure_dislikes",
+    "words_figure2user",
+    "words_user2figure",
+}
+
+
+def fr_string_fields(detailed: bool = False):
+    fields = {
+        "figure_birthday",
+        "figure_occupation",
+        "figure_education",
+        "figure_residence",
+        "figure_hometown",
+        "figure_appearance",
+        "exact_relation",
+    }
+    if not detailed:
+        return fields
+    fields.add("figure_name")
+    fields.add("core_personality")
+    fields.add("core_interaction_style")
+    fields.add("core_procedural_info")
+    fields.add("core_memory")
+    return fields
 
 
 def _frUpdateFieldCheck(fr_body: dict[str, Any]) -> dict[str, Any]:
     """
     校验 FigureAndRelation 更新字段是否合法
     """
-    allowed_fields = {
-        "figure_name",
-        "figure_gender",
-        "figure_role",
-        "figure_mbti",
-        "figure_birthday",
-        "figure_occupation",
-        "figure_education",
-        "figure_residence",
-        "figure_hometown",
-        "figure_likes",
-        "figure_dislikes",
-        "figure_appearance",
-        "words_figure2user",
-        "words_user2figure",
-        "exact_relation",
-        "core_personality",
-        "core_interaction_style",
-        "core_procedural_info",
-        "core_memory",
-    }
-    non_nullable_fields = {
-        "figure_name",
-        "figure_gender",
-        "figure_role",
-        "figure_likes",
-        "figure_dislikes",
-        "figure_appearance",
-        "words_figure2user",
-        "words_user2figure",
-        "exact_relation",
-        "core_personality",
-        "core_interaction_style",
-        "core_procedural_info",
-        "core_memory",
-    }
-    list_fields = {
-        "figure_likes",
-        "figure_dislikes",
-        "figure_appearance",
-        "words_figure2user",
-        "words_user2figure",
-    }
-    string_fields = {
-        "figure_name",
-        "figure_birthday",
-        "figure_occupation",
-        "figure_education",
-        "figure_residence",
-        "figure_hometown",
-        "exact_relation",
-        "core_personality",
-        "core_interaction_style",
-        "core_procedural_info",
-        "core_memory",
-    }
 
-    invalid_fields = [field for field in fr_body if field not in allowed_fields]
+    invalid_fields = [field for field in fr_body if field not in fr_allowed_fields]
     if invalid_fields:
         raise ValueError(f"Invalid fields: {', '.join(sorted(invalid_fields))}")
 
@@ -80,7 +90,7 @@ def _frUpdateFieldCheck(fr_body: dict[str, Any]) -> dict[str, Any]:
     for field, value in fr_body.items():
         # 格式 / 类型校验
         # 非 nullable 字段
-        if field in non_nullable_fields:
+        if field in fr_non_nullable_fields:
             if (
                 not value
                 or (isinstance(value, str) and value.strip() == "")
@@ -99,11 +109,11 @@ def _frUpdateFieldCheck(fr_body: dict[str, Any]) -> dict[str, Any]:
             if value is not None and not isinstance(value, MBTI):  # 允许 value 为 None
                 raise ValueError("Invalid figure MBTI")
         # 数组类型
-        elif field in list_fields:
+        elif field in fr_list_fields:
             if not isinstance(value, list):
                 raise ValueError(f"{field} must be a list")
         # 字符串类型
-        elif field in string_fields:
+        elif field in fr_string_fields(detailed=True):
             if not isinstance(value, str):
                 raise ValueError(f"{field} must be a string")
 
@@ -235,8 +245,21 @@ def updateFigureAndRelation(
             if figure_and_relation is None:
                 return {"status": -6, "message": "FigureAndRelation not found"}
 
+            fr_logs = []
             for field, value in updates.items():
+                old_value = getattr(figure_and_relation, field)
                 setattr(figure_and_relation, field, value)
+                fr_logs.append(
+                    FROverallUpdateLog(
+                        fr_id=fr_id,
+                        update_field_or_sub_dimension=field,
+                        old_value=serialize2String(old_value),
+                        new_value=serialize2String(value),
+                    )
+                )
+
+            if fr_logs:
+                db.add_all(fr_logs)
 
             db.commit()
         except Exception as e:
@@ -317,6 +340,171 @@ def getAllFigureAndRelations(
                     ]
                 )
                 for fr in figure_and_relations
+            ],
+        }
+
+
+def addFRBuildingGraphReport(
+    user_id: int,
+    fr_id: int,
+    report: str,
+) -> dict:
+    """
+    添加 FR 构建报告
+    """
+    if not isinstance(user_id, int):
+        return {"status": -1, "message": "Invalid user_id"}
+    if not isinstance(fr_id, int):
+        return {"status": -2, "message": "Invalid fr_id"}
+    if not isinstance(report, str) or report.strip() == "":
+        return {"status": -3, "message": "report cannot be empty"}
+
+    with session() as db:
+        fr = checkFigureAndRelationOwnership(db=db, user_id=user_id, fr_id=fr_id)
+        if fr is None:
+            return {"status": -4, "message": "FigureAndRelation not found"}
+
+        report_item = FRBuildingGraphReport(
+            fr_id=fr_id,
+            report=report.strip(),
+        )
+        try:
+            db.add(report_item)
+            db.commit()
+            db.refresh(report_item)
+        except Exception as e:
+            db.rollback()
+            logger.error(f"Add FRBuildingGraphReport failed: {str(e)}")
+            return {"status": -5, "message": "Add FRBuildingGraphReport failed"}
+
+        return {
+            "status": 200,
+            "message": "Add FRBuildingGraphReport success",
+            "fr_building_graph_report_id": report_item.id,
+        }
+
+
+def deleteFRBuildingGraphReport(
+    user_id: int,
+    fr_id: int,
+    fr_building_graph_report_id: int,
+) -> dict:
+    """
+    通过 report_id 软删除 FR 构建报告
+    """
+    if not isinstance(user_id, int):
+        return {"status": -1, "message": "Invalid user_id"}
+    if not isinstance(fr_id, int):
+        return {"status": -2, "message": "Invalid fr_id"}
+    if not isinstance(fr_building_graph_report_id, int):
+        return {"status": -3, "message": "Invalid fr_building_graph_report_id"}
+
+    with session() as db:
+        fr = checkFigureAndRelationOwnership(db=db, user_id=user_id, fr_id=fr_id)
+        if fr is None:
+            return {"status": -4, "message": "FigureAndRelation not found"}
+
+        try:
+            report_item = (
+                db.query(FRBuildingGraphReport)
+                .filter(
+                    FRBuildingGraphReport.id == fr_building_graph_report_id,
+                    FRBuildingGraphReport.fr_id == fr_id,
+                    FRBuildingGraphReport.is_deleted == False,
+                )
+                .first()
+            )
+            if report_item is None:
+                return {"status": -5, "message": "FRBuildingGraphReport not found"}
+            report_item.is_deleted = True
+            db.commit()
+        except Exception as e:
+            db.rollback()
+            logger.error(f"Delete FRBuildingGraphReport failed: {str(e)}")
+            return {"status": -6, "message": "Delete FRBuildingGraphReport failed"}
+
+        return {"status": 200, "message": "Delete FRBuildingGraphReport success"}
+
+
+def getFRBuildingGraphReport(
+    user_id: int,
+    fr_id: int,
+    fr_building_graph_report_id: int,
+) -> dict:
+    """
+    通过 report_id 获取 FR 构建报告详情
+    """
+    if not isinstance(user_id, int):
+        return {"status": -1, "message": "Invalid user_id"}
+    if not isinstance(fr_id, int):
+        return {"status": -2, "message": "Invalid fr_id"}
+    if not isinstance(fr_building_graph_report_id, int):
+        return {"status": -3, "message": "Invalid fr_building_graph_report_id"}
+
+    with session() as db:
+        fr = checkFigureAndRelationOwnership(db=db, user_id=user_id, fr_id=fr_id)
+        if fr is None:
+            return {"status": -4, "message": "FigureAndRelation not found"}
+
+        report_item = (
+            db.query(FRBuildingGraphReport)
+            .filter(
+                FRBuildingGraphReport.id == fr_building_graph_report_id,
+                FRBuildingGraphReport.fr_id == fr_id,
+                FRBuildingGraphReport.is_deleted == False,
+            )
+            .first()
+        )
+        if report_item is None:
+            return {"status": -5, "message": "FRBuildingGraphReport not found"}
+
+        return {
+            "status": 200,
+            "message": "Get FRBuildingGraphReport success",
+            "fr_building_graph_report": report_item.toJson(),
+        }
+
+
+def getAllFRBuildingGraphReport(
+    user_id: int,
+    fr_id: int,
+) -> dict:
+    """
+    获取当前 fr 的全部构建报告（不包含详情字段裁剪）
+    """
+    if not isinstance(user_id, int):
+        return {"status": -1, "message": "Invalid user_id"}
+    if not isinstance(fr_id, int):
+        return {"status": -2, "message": "Invalid fr_id"}
+
+    with session() as db:
+        fr = checkFigureAndRelationOwnership(db=db, user_id=user_id, fr_id=fr_id)
+        if fr is None:
+            return {"status": -3, "message": "FigureAndRelation not found"}
+
+        report_items = (
+            db.query(FRBuildingGraphReport)
+            .filter(
+                FRBuildingGraphReport.fr_id == fr_id,
+                FRBuildingGraphReport.is_deleted == False,
+            )
+            .order_by(FRBuildingGraphReport.created_at.desc())
+            .all()
+        )
+        return {
+            "status": 200,
+            "message": "Get all FRBuildingGraphReport success",
+            "fr_building_graph_reports": [
+                item.toJson(
+                    include=[
+                        "id",
+                        "fr_id",
+                        "report",
+                        "is_deleted",
+                        "created_at",
+                    ]
+                )
+                for item in report_items
             ],
         }
 
@@ -404,13 +592,9 @@ def _buildRecalledMarkdown(title: str, items: list[dict[str, Any]]) -> str:
         except (TypeError, ValueError):
             score_text = "0.0000"
         if sub_dimension != "":
-            lines.append(
-                f"- [{idx}] {sub_dimension}: "
-            )
+            lines.append(f"- [{idx}] {sub_dimension}: ")
         else:
-            lines.append(
-                f"- [{idx}] "
-            )
+            lines.append(f"- [{idx}] ")
         lines.append(f"  {content}")
     if len(lines) == 1:
         lines.append("- 无召回结果")

@@ -4,17 +4,20 @@ from typing import List, Literal
 
 from src.agents.embedding import vectorizeText
 from src.database.enums import (
+    ConflictStatus,
     FineGrainedFeedConfidence,
     FineGrainedFeedDimension,
     OriginalSourceType,
 )
 from src.database.index import session
 from src.database.models import (
+    FROverallUpdateLog,
     FineGrainedFeed,
     FineGrainedFeedConflict,
     OriginalSource,
 )
 from src.utils.index import (
+    serialize2String,
     timeDecay,
     checkFigureAndRelationOwnership,
     checkOriginalSourceOwnership,
@@ -224,6 +227,7 @@ async def updateFineGrainedFeed(
         if not isinstance(vector, list) or not vector:
             return {"status": -11, "message": "Invalid embedding result"}
 
+        old_content = fine_grained_feed.content
         fine_grained_feed.original_source_id = new_original_source_id
         fine_grained_feed.content = new_content
         fine_grained_feed.sub_dimension = (
@@ -231,6 +235,15 @@ async def updateFineGrainedFeed(
         )
         fine_grained_feed.embedding = vector
         fine_grained_feed.embedding_model_name = os.getenv("EMBEDDING_MODEL_NAME") or ""
+        db.add(
+            FROverallUpdateLog(
+                fr_id=fr_id,
+                update_field_or_sub_dimension=fine_grained_feed.sub_dimension or "",
+                update_dimension=fine_grained_feed.dimension,
+                old_value=serialize2String(old_content),
+                new_value=serialize2String(fine_grained_feed.content),
+            )
+        )
 
         try:
             db.commit()
@@ -615,9 +628,10 @@ def addFineGrainedFeedConflict(
     fr_id: int,
     dimension: FineGrainedFeedDimension,
     feed_ids: list[int],
-    description: str,
-    resolved: bool = False,
-    resolution: str | None = None,
+    old_value: str,
+    new_value: str,
+    conflict_detail: str,
+    status: ConflictStatus = ConflictStatus.PENDING,
 ) -> dict:
     """
     添加细粒度信息冲突
@@ -632,12 +646,14 @@ def addFineGrainedFeedConflict(
         isinstance(item, int) for item in feed_ids
     ):
         return {"status": -4, "message": "Invalid feed_ids"}
-    if not description or description.strip() == "":
-        return {"status": -5, "message": "description cannot be empty"}
-    if not isinstance(resolved, bool):
-        return {"status": -6, "message": "Invalid resolved"}
-    if resolution is not None and not isinstance(resolution, str):
-        return {"status": -7, "message": "Invalid resolution"}
+    if not isinstance(old_value, str) or old_value.strip() == "":
+        return {"status": -5, "message": "old_value cannot be empty"}
+    if not isinstance(new_value, str) or new_value.strip() == "":
+        return {"status": -6, "message": "new_value cannot be empty"}
+    if not conflict_detail or conflict_detail.strip() == "":
+        return {"status": -7, "message": "conflict_detail cannot be empty"}
+    if not isinstance(status, ConflictStatus):
+        return {"status": -10, "message": "Invalid status"}
 
     with session() as db:
         fr = checkFigureAndRelationOwnership(db, user_id, fr_id)
@@ -650,9 +666,10 @@ def addFineGrainedFeedConflict(
             fr_id=fr_id,
             dimension=dimension,
             feed_ids=feed_ids,
-            description=description.strip(),
-            resolved=resolved,
-            resolution=resolution if resolution is not None else None,
+            old_value=old_value.strip(),
+            new_value=new_value.strip(),
+            conflict_detail=conflict_detail.strip(),
+            status=status,
         )
 
         try:
@@ -661,7 +678,7 @@ def addFineGrainedFeedConflict(
         except Exception as e:
             db.rollback()
             logger.error(f"Add FineGrainedFeedConflict failed: {str(e)}")
-            return {"status": -10, "message": "Add FineGrainedFeedConflict failed"}
+            return {"status": -11, "message": "Add FineGrainedFeedConflict failed"}
 
         return {"status": 200, "message": "Add FineGrainedFeedConflict success"}
 
@@ -711,6 +728,7 @@ def resolveFineGrainedFeedConflict(
     user_id: int,
     fr_id: int,
     fine_grained_feed_conflict_id: int,
+    status: ConflictStatus,
 ) -> dict:
     """
     解决细粒度信息冲突
@@ -721,11 +739,15 @@ def resolveFineGrainedFeedConflict(
         return {"status": -2, "message": "Invalid fr_id"}
     if not isinstance(fine_grained_feed_conflict_id, int):
         return {"status": -3, "message": "Invalid fine_grained_feed_conflict_id"}
+    if not isinstance(status, ConflictStatus):
+        return {"status": -4, "message": "Invalid status"}
+    if status == ConflictStatus.PENDING:
+        return {"status": -5, "message": "status cannot be pending when resolving"}
 
     with session() as db:
         fr = checkFigureAndRelationOwnership(db, user_id, fr_id)
         if fr is None:
-            return {"status": -4, "message": "FigureAndRelation not found"}
+            return {"status": -6, "message": "FigureAndRelation not found"}
 
         try:
             fine_grained_feed_conflict = (
@@ -737,19 +759,19 @@ def resolveFineGrainedFeedConflict(
                 .first()
             )
             if fine_grained_feed_conflict is None:
-                return {"status": -5, "message": "FineGrainedFeedConflict not found"}
-            if fine_grained_feed_conflict.resolved:
+                return {"status": -7, "message": "FineGrainedFeedConflict not found"}
+            if fine_grained_feed_conflict.status != ConflictStatus.PENDING:
                 return {
-                    "status": -6,
+                    "status": -8,
                     "message": "FineGrainedFeedConflict already resolved",
                 }
 
-            fine_grained_feed_conflict.resolved = True
+            fine_grained_feed_conflict.status = status
             db.commit()
         except Exception as e:
             db.rollback()
             logger.error(f"Resolve FineGrainedFeedConflict failed: {str(e)}")
-            return {"status": -7, "message": "Resolve FineGrainedFeedConflict failed"}
+            return {"status": -9, "message": "Resolve FineGrainedFeedConflict failed"}
 
         return {"status": 200, "message": "Resolve FineGrainedFeedConflict success"}
 
@@ -817,9 +839,9 @@ def getAllFineGrainedFeedConflict(
             case "all":
                 pass
             case "unresolved":
-                query = query.filter(FineGrainedFeedConflict.resolved == False)
+                query = query.filter(FineGrainedFeedConflict.status == ConflictStatus.PENDING)
             case "resolved":
-                query = query.filter(FineGrainedFeedConflict.resolved == True)
+                query = query.filter(FineGrainedFeedConflict.status != ConflictStatus.PENDING)
             case _:
                 return {"status": -4, "message": "Invalid scope"}
 
@@ -836,7 +858,9 @@ def getAllFineGrainedFeedConflict(
                         "fr_id",
                         "dimension",
                         "feed_ids",
-                        "resolved",
+                        "old_value",
+                        "new_value",
+                        "status",
                         "created_at",
                     ]
                 )
