@@ -1,6 +1,6 @@
 from langgraph.graph import StateGraph, START, END
 from langgraph.graph.state import CompiledStateGraph
-from langgraph.checkpoint.memory import InMemorySaver
+import asyncio
 import logging
 
 from src.agents.graphs.ConversationGraph.state import (
@@ -17,10 +17,11 @@ from src.agents.graphs.ConversationGraph.nodes import (
     nodeRecallPersonalitiesFromDB,
     nodeRecallProceduralInfosFromDB,
 )
-
-# from src.agent.graph.checkpointer import getCheckpointer
+from src.agents.graphs.checkpointer import agetCheckpointer
 
 logger = logging.getLogger(__name__)
+_conversation_graph_instance: CompiledStateGraph | None = None
+_conversation_graph_lock = asyncio.Lock()
 
 
 def buildBaseConversationGraph() -> StateGraph:
@@ -56,28 +57,33 @@ def buildBaseConversationGraph() -> StateGraph:
 
     graph.add_edge("nodeBuildMessage", "nodeCallLLM")
     graph.add_edge("nodeCallLLM", END)
-    # # todo: 先测试 LLM 调用前节点
-    # graph.add_edge("nodeBuildMessage", END)
 
     return graph
 
 
 def buildConversationGraph() -> CompiledStateGraph:
+    """
+    构建无短期记忆的 ConversationGraph
+    """
     graph = buildBaseConversationGraph()
     return graph.compile()
 
 
-def buildConversationGraphWithMemory() -> CompiledStateGraph:
-    # todo: PostgresSaver 报500，暂用 InMemorySaver
+async def buildConversationGraphWithMemory() -> CompiledStateGraph:
+    """
+    构建有短期记忆的 ConversationGraph
+    【注意】graph 中存在大量异步节点，必须使用异步 checkpointer，必须用 ainvoke 调用图
+    """
     graph = buildBaseConversationGraph()
-    return graph.compile(checkpointer=InMemorySaver())
-    # return graph.compile(checkpointer=getCheckpointer())
+    checkpointer = await agetCheckpointer()
+    return graph.compile(checkpointer=checkpointer)
 
 
-# 全局单例：在模块导入时执行一次，进程内后续都复用同一个对象
-# ConversationGraph = buildConversationGraph()
-ConversationGraph = buildConversationGraphWithMemory()
-
-
-def getConversationGraph() -> CompiledStateGraph:
-    return ConversationGraph
+async def getConversationGraph() -> CompiledStateGraph:
+    global _conversation_graph_instance
+    if _conversation_graph_instance is not None:
+        return _conversation_graph_instance
+    async with _conversation_graph_lock:
+        if _conversation_graph_instance is None:
+            _conversation_graph_instance = await buildConversationGraphWithMemory()
+    return _conversation_graph_instance

@@ -305,15 +305,17 @@ async def nodeCallLLM(state: ConversationGraphState) -> ConversationGraphOutput:
             "logs": logs,
         }
 
+    low_context_depended_feeds = f"**注意**：以下信息作为关系与人物画像的补充。\n\n# 核心价值观与思维方式：\n{state['recalled_personalities_from_db']}\n\n# 沟通风格与反应模式：\n{state['recalled_interaction_styles_from_db']}"
+    high_context_depended_feeds = f"**注意**：以下信息仅供参考，只有和当前语境相关时需要使用，否则请忽略。\n\n# 核心程序性知识（ta怎么做事、工作方法）：\n{state['recalled_procedural_infos_from_db']}\n\n# 人生经历和重要故事：\n{state['recalled_memories_from_db']}\n"
+
     messages_to_send = [
         # 1. 系统提示词
         SystemMessage(content=CONVERSATION_SYSTEM_PROMPT),
         # 2. 关系与画像上下文
         SystemMessage(content=f"关系与人物画像：\n{state['figure_persona']}"),
         # # 3. DB召回的长期记忆（真实）
-        # SystemMessage(
-        #     content=f"可能参考的召回的长期记忆：\n{state['recalled_facts_from_db']}"
-        # ),
+        SystemMessage(content=low_context_depended_feeds),
+        SystemMessage(content=high_context_depended_feeds),
         # # 4. Viking召回的长期记忆（不可信）
         # SystemMessage(
         #     content=f"可能参考的召回的长期记忆：\n{json.dumps(state['recalled_facts_from_viking'], ensure_ascii=False)}"
@@ -406,10 +408,10 @@ async def nodeCallLLM(state: ConversationGraphState) -> ConversationGraphOutput:
 
     # todo: 测试，上线删
     print("\n")
-    pprint.pprint(state, indent=2)
+    # pprint.pprint(state, indent=2)
     logger.info(f"\nllm_output: {llm_output}\n")
     logger.info(f"next_messages: {next_messages}\n")
-    
+
     return {
         "llm_output": llm_output,
         "messages": next_messages,

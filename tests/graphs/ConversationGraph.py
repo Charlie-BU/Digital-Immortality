@@ -9,14 +9,15 @@ from src.agents.graphs.ConversationGraph.graph import getConversationGraph
 
 
 messages_samples = [
-    "最近压力有点大，事情很多，感觉每天都在救火。",
-    "不过我还是想保持高效和积极，也希望沟通更直接一点。",
+    # "最近去哪啦？怎么没见到你",
+    # "你不是刚从美国回来？怎么到处跑？",
+    "我记得你上周不是才去玩？",
 ]
 
 
 async def main():
     fr_id = 2
-    graph = getConversationGraph()
+    graph = await getConversationGraph()
     init_state = {
         "request": {
             "user_id": 1,
