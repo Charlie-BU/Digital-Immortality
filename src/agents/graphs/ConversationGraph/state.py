@@ -47,6 +47,8 @@ class ConversationGraphState(
     recalled_memories_from_db: str  # 根据本轮消息召回的 memory
 
     recalled_facts_from_viking: List[dict]  # Viking 记忆库召回的记忆
+
+    conversation_summary: str  # 更早对话的滚动摘要
     logs: Annotated[list[NodeLog], _mergeUniqueList]
     warnings: Annotated[list[str], _mergeUniqueList]
     errors: Annotated[list[str], _mergeUniqueList]

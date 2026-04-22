@@ -17,7 +17,7 @@ from src.services.fine_grained_feed import recallFineGrainedFeeds
 from src.utils.index import (
     checkFigureAndRelationOwnership,
     cleanList,
-    normalizeText,
+    stringifyValue,
     serialize2String,
 )
 
@@ -566,7 +566,7 @@ def buildFigurePersonaMarkdown(
                 continue
             lines.append(f"- {title}: {'；'.join(text_list)}")
             continue
-        lines.append(f"- {title}: {normalizeText(value)}")
+        lines.append(f"- {title}: {stringifyValue(value)}")
     if len(lines) == 1:
         lines.append("- 暂无有效画像信息")
     return "\n".join(lines)
@@ -588,7 +588,7 @@ def buildRecalledMarkdown(title: str, items: list[dict[str, Any]]) -> str:
         sub_dimension = str(feed.get("sub_dimension", "")).strip()
         confidence = feed.get("confidence")
         confidence_text = (
-            normalizeText(confidence) if confidence is not None else "unknown"
+            stringifyValue(confidence) if confidence is not None else "unknown"
         )
         score = item.get("score", 0.0)
         try:

@@ -56,141 +56,168 @@
 
 # 性能优化
 
-## 去除重复注入
+本节记录当前版本已经落地的优化项、设计取舍、剩余问题与下一步建议。以下描述以当前代码为准，而不是最初的方案草稿。
 
-我基于现有 `ConversationGraph` 的拼装方式，先给你一个“只改注入策略、不改图结构”的去重方案，尽量把改动收敛在 `nodes.py` 和少量辅助函数里。**任务描述**
+## 当前结果
 
-- 基于当前 `ConversationGraph` 架构，设计一套“先砍重复内容”的优化方案。
-- 目标是 `最小改动`、`不重构图`、`优先减少 prompt 冗余`。
+- 当前 `ConversationGraph` 已从“串行、重复注入、短期记忆无上限增长”的版本，演进为“部分并行、去重注入、带滚动摘要的短期记忆”版本。
+- 已落地的核心优化有 3 类：
+    - `去除重复注入`
+    - `短期记忆裁剪`
+    - `并行化非依赖节点`
+- 这三类优化都遵循了 `最小改动原则`：不重构整体图，不改 LLM 输出协议，只在 `state.py`、`nodes.py`、`graph.py` 附近做局部调整。
 
-**任务结果**
+## 1. 去除重复注入
 
-- 可行，而且可以只通过调整 [nodes.py](file:///Users/bytedance/Desktop/work/Immortality/src/agents/graphs/ConversationGraph/nodes.py) 的上下文组装逻辑实现。
-- 核心思路不是“减少信息种类”，而是把当前的两份重叠上下文拆成 `稳定底座` 和 `本轮增量`。
+### 问题
 
-**方案总览**
+- 原实现中，`figure_persona` 已经包含 `core_personality`、`core_interaction_style`、`core_procedural_info`、`core_memory` 等摘要。
+- 同时 `nodeCallLLM()` 又会把 DB 召回的 personality / interaction / procedural / memory 四类信息再次完整拼进 system messages。
+- 这会导致同一类信息在 `人物画像` 和 `召回上下文` 中重复出现，增加 token、拉长推理时延，也会稀释真正重要的本轮信号。
 
-- 保留 `figure_persona`，但把它从“全量画像”收缩成“稳定画像摘要”。
-- 保留 recall，但只注入 `figure_persona` 里没有表达过的“本轮增量信息”。
-- 图结构不变，仍然是 `Load FR -> Recall -> Build Message -> Call LLM`，只调整节点产物的内容和 `nodeCallLLM()` 的拼装方式。
+### 当前实现
 
-**为什么当前会重复**
-
-- `figure_persona` 由 `buildFigurePersonaMarkdown()` 生成，里面已经包含：
-    - `core_personality`
-    - `core_interaction_style`
-    - `core_procedural_info`
-    - `core_memory`
-      见 [figure_and_relation.py:L521-L566](file:///Users/bytedance/Desktop/work/Immortality/src/services/figure_and_relation.py#L521-L566)
-- `nodeCallLLM()` 又把四类 recalled feeds 再完整拼成两段 system message：
-    - `low_context_depended_feeds`
-    - `high_context_depended_feeds`
-      见 [nodes.py:L289-L304](file:///Users/bytedance/Desktop/work/Immortality/src/agents/graphs/ConversationGraph/nodes.py#L289-L304)
-- 所以现在属于：
-    - `稳定信息` 在 persona 里出现一次
-    - `相同主题的细节和例子` 又在 recall 里出现一次
-
-**最小改动方案**
-
-- 第一层：保留 `figure_persona`，但注入时改成“轻量版 persona”
-- 第二层：保留 recall，但只传“增量 recall”
-- 第三层：如果某一类 recall 和 persona 高度重复，则整类跳过
-
-**具体设计**
-
-- `Compact Persona` 只保留稳定、低频变化、跨轮都重要的信息：
-    - 基本身份：姓名、角色、关系、职业、学校、常住地、家乡
-    - 风格摘要：`core_personality`、`core_interaction_style`
-    - 可选边界：`core_procedural_info` 里真正稳定的规则
-- `Compact Persona` 不再直接放这些高重复字段：
+- 人物画像构建阶段会显式排除掉以下字段，见 [nodeLoadFRAndPersona](file:///Users/bytedance/Desktop/work/Immortality/src/agents/graphs/ConversationGraph/nodes.py#L177-L222)：
     - `words_figure2user`
     - `words_user2figure`
     - `core_procedural_info`
     - `core_memory`
-- 理由：
-    - `words_figure2user` 已经大量出现在 system prompt 模板变量里，见 [nodes.py:L259-L266](file:///Users/bytedance/Desktop/work/Immortality/src/agents/graphs/ConversationGraph/nodes.py#L259-L266)
-    - `core_memory` 和 recall memory 高度重叠
-    - likes/dislikes 对很多短聊轮次帮助不大，且 token 占比高
+- 对应的画像构造函数已支持 `exclude_fields`，见 [buildFigurePersonaMarkdown](file:///Users/bytedance/Desktop/work/Immortality/src/services/figure_and_relation.py#L521-L571)。
+- DB 召回阶段已经停掉 `PERSONALITY` 和 `INTERACTION_STYLE` 两类召回，只保留：
+    - `PROCEDURAL_INFO`
+    - `MEMORY`
+      见 [nodeRecallFeedsFromDB](file:///Users/bytedance/Desktop/work/Immortality/src/agents/graphs/ConversationGraph/nodes.py#L225-L357)。
+- `nodeCallLLM()` 当前仅注入：
+    - 基础 system prompt
+    - 精简后的 `figure_persona`
+    - `memory + procedural` 的 recall 补充
+    - 可选的 `conversation_summary`
+    - 最近的短期记忆消息
+      见 [nodeCallLLM](file:///Users/bytedance/Desktop/work/Immortality/src/agents/graphs/ConversationGraph/nodes.py#L412-L596)。
 
-**增量 recall 的规则**
+### 设计取舍
 
-- 回忆不是全贴，而是按“是否补充 persona 中没有的内容”决定是否注入。
-- 可先用一个非常朴素的规则，**不需要语义模型**，不引入额外依赖：
-    - 如果某类 recall 为空，跳过
-    - 如果某类 recall 的标题对应摘要字段在 persona 中已有，就只保留该类 recall 的前 `1~3` 条
-    - 如果 recall 文本和 persona 文本出现明显重叠关键词，就只保留分数最高的 `1` 条
-    - 如果完全没有新增价值，就整类不注入
+- 这里采用的是“`persona` 负责稳定画像，`recall` 负责本轮补充”的职责切分，而不是做复杂的语义去重。
+- 这是一个偏保守但工程上更稳的方案：
+    - 优点是实现简单、风险低、容易回滚。
+    - 代价是 recall 仍然可能存在少量内部冗余，但相比原始版本，重复注入已经显著下降。
 
-**最小实现版本**
+### 当前收益
 
-- 不做复杂文本去重，只做“按字段职责切分”
-- 直接规定：
-    - `figure_persona` 只负责“稳定画像”
-    - recall 只负责“本轮相关例子”
-- 这样已经能砍掉很大一部分重复
+- system prompt 区域的冗余明显减少。
+- 人物画像和 recall 的职责边界更清晰。
+- 生成模型在处理短闲聊时，不再需要每轮都消费同一批“画像摘要 + 原始例子”的双份上下文。
 
-**字段切分**
+## 2. 短期记忆裁剪
 
-- `figure_persona` 保留：
-    - `figure_name`
-    - `figure_role`
-    - `figure_mbti`
-    - `figure_occupation`
-    - `figure_education`
-    - `figure_residence`
-    - `figure_hometown`
-    - `figure_likes`
-    - `figure_dislikes`
-    - `exact_relation`
-    - `core_personality`
-    - `core_interaction_style`
-- `figure_persona` 移除：
-    - `words_figure2user`
-    - `words_user2figure`
-    - `core_memory`
-    - `core_procedural_info`
-- recall 保留：
-    - `recalled_procedural_infos_from_db`
-    - `recalled_memories_from_db`
-    - `recalled_personalities_from_db` 和 `recalled_interaction_styles_from_db` 只保留少量高分条目，或直接先不注入
+### 问题
 
-**推荐的注入结构**
+- 原实现会把历史 `HumanMessage` / `AIMessage` 持续累积在 `messages` 中。
+- 多轮对话后，短期记忆会线性增长，并直接进入下一轮主模型上下文，成为最主要的长期退化来源之一。
 
-- `SystemMessage 1`: 基础对话规则
-- `SystemMessage 2`: 精简人物画像
-- `SystemMessage 3`: 本轮相关补充信息，仅包含少量 recall
-- `HumanMessage`: 本轮收到的消息
+### 当前实现
 
-**可以直接删掉的重复点**
+- `ConversationGraphState` 新增了 `conversation_summary`，用于承载“更早对话的滚动摘要”，见 [state.py](file:///Users/bytedance/Desktop/work/Immortality/src/agents/graphs/ConversationGraph/state.py#L35-L56)。
+- `nodeBuildAndTrimMessage()` 会在把本轮 `HumanMessage` 加入 `messages` 后执行 trim，见 [nodeBuildAndTrimMessage](file:///Users/bytedance/Desktop/work/Immortality/src/agents/graphs/ConversationGraph/nodes.py#L367-L409)。
+- trim 逻辑在 `_buildTrimmedShortTermMemory()` 中，见 [nodes.py](file:///Users/bytedance/Desktop/work/Immortality/src/agents/graphs/ConversationGraph/nodes.py#L82-L152)：
+    - 若总字符数和消息条数都未超阈值，则不裁剪。
+    - 若超阈值，则从最早的消息开始裁掉。
+    - 被裁掉的消息与旧摘要一起交给 `DOUBAO_2_0_MINI` 做滚动总结。
+    - 生成新的 `conversation_summary`。
+    - 通过 `RemoveMessage` 把旧消息从 `MessagesState` 中真正删除。
+- `nodeCallLLM()` 会在主模型调用前，把 `conversation_summary` 作为一条额外的 `SystemMessage` 注入，见 [nodes.py](file:///Users/bytedance/Desktop/work/Immortality/src/agents/graphs/ConversationGraph/nodes.py#L475-L481)。
 
-- `关系与人物画像` 中的 `core_memory`
-- `关系与人物画像` 中的大段“常说的话”
-- recall 中的 `personality` 和 `interaction_style` 全量展开
-- 这几项删掉后，效果一般不会明显变差，但 token 会明显下降
+### 为什么不用“把 summary 伪装成一条普通聊天消息”
 
-**一版更具体的执行顺序**
+- 当前实现没有把 summary 塞回 `messages` 列表头部，而是单独放到 `conversation_summary` 字段。
+- 这样做的原因是：
+    - 摘要是元信息，不是用户或角色真实说过的一句话。
+    - 单独存储可以避免“summary of summary” 和“把摘要误当历史原话”的语义污染。
+    - 调试和日志分析时，也更容易区分“原始短期记忆”和“滚动摘要”。
 
-- 第一步：在 `nodeCallLLM()` 内不再直接注入 `state['figure_persona']`
-- 第二步：新增一个 conversation-specific 的 compact persona 构造函数
-- 第三步：限制 recall 注入量，只保留每类前几条
-- 第四步：观察回复质量是否下降
-- 第五步：如果质量没掉，再考虑进一步从 recall 侧减 `top_k`
+### 为什么 `messages` 返回的是 patch 而不是整表
 
-**我认为最适合你的最小版本**
+- `ConversationGraphState` 继承的是 `MessagesState`，其 `messages` 更新语义是“增量合并”，不是“整表覆盖”，见 [state.py](file:///Users/bytedance/Desktop/work/Immortality/src/agents/graphs/ConversationGraph/state.py#L35-L37)。
+- 所以 `nodeBuildAndTrimMessage()` 返回的是：
+    - 一组 `RemoveMessage`
+    - 本轮新加入的 `HumanMessage`
+- 未被删除、且本来就存在于 state 中的旧消息，不需要重复返回，见 [nodes.py](file:///Users/bytedance/Desktop/work/Immortality/src/agents/graphs/ConversationGraph/nodes.py#L399-L407)。
 
-- 只做这两件事：
-    - `figure_persona` 改为精简版
-    - recall 每类只注入前 `1~2` 条，先保留 `memory/procedural`，弱化 `personality/interaction`
-- 这已经能解决当前 70% 以上的重复问题，而且代码改动很小。
+### 当前参数
 
-**风险与注意点**
+- 短期记忆 trim 当前使用以下阈值：
+    - `SHORT_TERM_MEMORY_MAX_CHARS=4000`
+    - `SHORT_TERM_MEMORY_MAX_MESSAGES=12`
+    - `SHORT_TERM_MEMORY_TARGET_CHARS=2800`
+      见 [.env](file:///Users/bytedance/Desktop/work/Immortality/.env#L96-L98)。
+- 这组参数的含义是：
+    - 超过 `MAX_CHARS` 或 `MAX_MESSAGES` 时才触发滚动摘要。
+    - 一旦触发，尽量把剩余原始消息压回到 `TARGET_CHARS` 附近。
+    - `MAX -> TARGET` 的回落区间用于避免在阈值边缘频繁反复 summarize。
 
-- 如果把 persona 砍得太狠，模型会更依赖 recall，可能导致“人设稳定性”下降。
-- 如果把 `interaction_style` recall 全删掉，模型可能短期内更像“通用会聊天的人”，不像具体角色。
-- 所以第一版不要一步到位，建议：
-    - persona 保留摘要
-    - interaction recall 留 1 条
-    - memory recall 留 2 条
+### 当前收益
+
+- 多轮对话不会再无上限积累原始消息。
+- 更早历史被压缩为结构化摘要，保留连续性但显著降低体积。
+- 当前轮输入始终保留，避免由于裁剪丢失用户最新消息。
+
+### 当前代价
+
+- 一旦触发 trim，本轮会额外产生一次 `mini` 模型调用。
+- 因此这项优化是“用偶发的 summary 成本，换取长期上下文体积受控”。
+- 对长会话来说，这笔交易通常是值得的；对极短会话，trim 通常不会触发。
+
+## 3. 图执行并行化
+
+### 原问题
+
+- 原图执行顺序是：
+    - `Load FR -> Recall -> Build Message -> Call LLM`
+- 其中 `Recall` 和“构建本轮消息”之间并没有真实依赖，但之前被串行放在主链路上。
+
+### 当前实现
+
+- 当前图结构改为：
+    - `nodeLoadFRAndPersona`
+    - 并行执行 `nodeRecallFeedsFromDB` 和 `nodeBuildAndTrimMessage`
+    - 最后汇合到 `nodeCallLLM`
+- 见 [graph.py](file:///Users/bytedance/Desktop/work/Immortality/src/agents/graphs/ConversationGraph/graph.py#L24-L45)。
+
+### 收益
+
+- “本轮消息构建 / trim”和“DB recall” 可以并行准备，缩短关键路径。
+- 虽然这不是最大的性能收益来源，但实现简单，且没有明显副作用。
+
+## 4. 其他顺手优化
+
+- 当前写回短期记忆的 AI 消息，不再保留主模型的原始 JSON 输出，而是只保存角色本轮实际要发送的文本内容，见 [nodes.py](file:///Users/bytedance/Desktop/work/Immortality/src/agents/graphs/ConversationGraph/nodes.py#L551-L570)。
+- 这会减少：
+    - 短期记忆中的无用格式噪声
+    - checkpoint 持久化体积
+    - 下一轮再次送入主模型时的字符数
+
+## 5. 当前版本的整体评价
+
+- 相比第一版，当前版本已经解决了两个最值钱的问题：
+    - `重复注入`
+    - `短期记忆无上限增长`
+- 当前版本更接近适合上线试跑的工程形态：
+    - 结构仍然简单
+    - 风险可控
+    - 性能随轮次恶化的问题已被显著缓解
+- 但它仍不是最终最优版本，主要原因是：
+    - `getPrompt()` 仍然每轮远程拉取 prompt
+    - `messages_to_send` 仍然整包打印日志
+    - `memory/procedural` recall 默认 `top_k=10/10`，对闲聊场景仍然偏保守
+    - 触发 trim 时需要额外一次 mini 模型调用
+
+## 6. 后续建议
+
+- `优先级高`：给 `getPrompt()` 做进程内缓存，降低每轮远程 I/O。
+- `优先级高`：删除或缩减整包 `messages_to_send` 日志，只保留条数、字符数、是否触发 trim 等统计信息。
+- `优先级中`：继续观察 `SHORT_TERM_MEMORY_MAX_CHARS / TARGET_CHARS` 是否偏宽松，必要时收紧到更偏性能优先的区间。
+- `优先级中`：视线上效果继续下调 `TOP_K_MEMORY_FEEDS_FOR_CONVERSATION` 和 `TOP_K_PROCEDURAL_FEEDS_FOR_CONVERSATION`。
+- `优先级低`：如果后续需要更强的连续性，再考虑把 `conversation_summary` 的生成 prompt 做成更细化的模板，或者区分“关系事实摘要”和“短期话题摘要”两层结构。
 
 # FAQs
 

@@ -1,23 +1,155 @@
-from langchain_core.messages import SystemMessage, HumanMessage
 import json
 import logging
 import os
 from datetime import datetime
+from typing import List
+from langchain_core.messages import AIMessage, SystemMessage, HumanMessage, BaseMessage
+from langgraph.graph.message import RemoveMessage
 
 from src.agents.graphs.ConversationGraph.state import (
     ConversationGraphOutput,
     ConversationGraphState,
 )
-from src.agents.llm import arkAinvoke
+from src.agents.llm import arkAinvoke, prepareLLM
 from src.agents.prompt import getPrompt
 from src.database.enums import FineGrainedFeedDimension
 from src.database.index import session
 from src.services.fine_grained_feed import recallFineGrainedFeeds
 from src.services.figure_and_relation import buildFigurePersonaMarkdown
-from src.utils.index import checkFigureAndRelationOwnership
+from src.utils.index import checkFigureAndRelationOwnership, stringifyValue
 
 
 logger = logging.getLogger(__name__)
+
+
+def _getMessageCharCount(message: BaseMessage) -> int:
+    """
+    计算消息内容的字符数
+    """
+    return len(stringifyValue(getattr(message, "content", ""), strip=False))
+
+
+def _stringifyMessagesForSummary(messages: List[BaseMessage]) -> str:
+    """
+    将消息列表文本化，用于注入模型进行摘要生成
+    """
+    lines: list[str] = []
+    for message in messages:
+        content = stringifyValue(getattr(message, "content", ""))
+        if content == "":
+            continue
+        role = type(message).__name__
+        lines.append(f"[{role}]\n{content}")
+    return "\n\n".join(lines)
+
+
+async def _summarizeTrimmedMessages(
+    old_summary: str,
+    messages_to_summarize: List[BaseMessage],
+) -> str:
+    """
+    对消息进行滚动总结
+    """
+    if not messages_to_summarize:
+        return old_summary.strip()
+
+    summary_llm = prepareLLM(
+        "DOUBAO_2_0_MINI",
+        options={
+            "temperature": 0,
+            "reasoning_effort": "minimal",
+        },
+    )
+    SUMMARY_MESSAGES_FOR_TRIM = await getPrompt(os.getenv("SUMMARY_MESSAGES_FOR_TRIM"))
+    if not SUMMARY_MESSAGES_FOR_TRIM:
+        raise ValueError("SUMMARY_MESSAGES_FOR_TRIM prompt not found")
+
+    old_summary = old_summary.strip()
+    messages_block = _stringifyMessagesForSummary(messages_to_summarize)
+    user_prompt = (
+        f"旧摘要：\n{old_summary or '无'}\n\n"
+        f"需要新纳入摘要的更早消息：\n{messages_block or '无'}"
+    )
+    response = await summary_llm.ainvoke(
+        [
+            SystemMessage(content=SUMMARY_MESSAGES_FOR_TRIM),
+            HumanMessage(content=user_prompt),
+        ]
+    )
+    return stringifyValue(response.content, strip=False) or old_summary
+
+
+async def _buildTrimmedShortTermMemory(
+    messages: List[BaseMessage],  # 当前 session 中储存的全部消息
+    old_summary: str,  # 旧的短期记忆摘要
+) -> tuple[List[BaseMessage], str, List[RemoveMessage], dict[str, int]]:
+    """
+    修剪短期记忆
+
+    当 messages 的总字符数或消息条数超过阈值时，从最早的消息开始裁剪，
+    将被裁掉的历史消息与旧摘要一起交给 mini 模型滚动总结为新的 conversation_summary，
+    同时生成对应的 RemoveMessage 列表，供 MessagesState 删除旧消息。
+    无论是否触发裁剪，都会保留最新的一条消息，避免丢失当前轮输入。
+
+    返回：
+    - 修剪后的消息列表
+    - 新的 conversation_summary
+    - 删除旧消息的 RemoveMessage 列表
+    - 修剪统计信息
+    """
+    total_chars_before_trim = sum(_getMessageCharCount(message) for message in messages)
+    messages_count_before_trim = len(messages)
+    if total_chars_before_trim <= int(
+        os.getenv("SHORT_TERM_MEMORY_MAX_CHARS", "4000")
+    ) and messages_count_before_trim <= int(
+        os.getenv("SHORT_TERM_MEMORY_MAX_MESSAGES", "12")
+    ):
+        # 字符数和消息条数都在阈值内，无需裁剪
+        return (
+            messages,
+            old_summary.strip(),
+            [],
+            {
+                "messages_count_before_trim": messages_count_before_trim,
+                "messages_count_after": messages_count_before_trim,
+                "chars_before": total_chars_before_trim,
+                "chars_after": total_chars_before_trim,
+                "trimmed_count": 0,
+            },
+        )
+
+    messages_after_trim = list(messages)  # 修剪后剩余的消息
+    messages_to_summarize: List[BaseMessage] = []  # 待 summarize 的消息
+    kept_chars = total_chars_before_trim  # 剩余的字符数
+
+    while len(messages_after_trim) > 1 and (
+        kept_chars > int(os.getenv("SHORT_TERM_MEMORY_TARGET_CHARS", "2800"))
+        or len(messages_after_trim)
+        > int(os.getenv("SHORT_TERM_MEMORY_MAX_MESSAGES", "12"))
+    ):
+        # 从最早的消息开始裁剪，直到剩余的字符数小于等于目标字符数或消息条数小于等于阈值
+        removed_message = messages_after_trim.pop(0)
+        messages_to_summarize.append(removed_message)
+        kept_chars -= _getMessageCharCount(removed_message)
+
+    new_summary = await _summarizeTrimmedMessages(old_summary, messages_to_summarize)
+    remove_messages = [
+        RemoveMessage(id=message.id)
+        for message in messages_to_summarize
+        if getattr(message, "id", None)
+    ]
+    return (
+        messages_after_trim,
+        new_summary,
+        remove_messages,
+        {
+            "messages_count_before_trim": messages_count_before_trim,
+            "messages_count_after": len(messages_after_trim),
+            "chars_before": total_chars_before_trim,
+            "chars_after": max(kept_chars, 0),
+            "trimmed_count": len(messages_to_summarize),
+        },
+    )
 
 
 def _recalledFeeds2Markdown(items: list[dict]) -> str:
@@ -239,14 +371,41 @@ async def nodeBuildAndTrimMessage(state: ConversationGraphState) -> dict:
     logger.info("nodeBuildAndTrimMessage is called")
 
     messages = state.get("messages") or []
+    old_summary = state.get("conversation_summary") or ""
+    logs = state.get("logs") or []
     messages_received = state["request"]["messages_received"]
     messages_received = "\n".join(messages_received)
     messages.append(HumanMessage(content=messages_received or ""))
 
-    # todo：trim 消息
+    (
+        trimmed_messages,
+        conversation_summary,
+        remove_messages,
+        trim_stats,
+    ) = await _buildTrimmedShortTermMemory(
+        messages=messages,
+        old_summary=old_summary,
+    )
+
+    logs += [
+        {
+            "step": "nodeBuildAndTrimMessage",
+            "status": "ok",
+            "detail": "Build current human message and trim short-term memory",
+            "data": trim_stats,
+        }
+    ]
     logger.info(f"nodeBuildAndTrimMessage executed finished\n")
     return {
-        "messages": messages,
+        "conversation_summary": conversation_summary,
+        # `messages` 在 MessagesState 中是增量合并，不是整表覆盖。
+        # 这里返回的是对已有 messages 的 patch：
+        # 1. 用 RemoveMessage 删除被 trim 掉的旧消息；
+        # 2. 只追加本轮新收到的 HumanMessage。
+        # trimmed_messages 中其余未被删除的旧消息，本来就已经在 state 里，
+        # 因此不需要重复返回。
+        "messages": remove_messages + trimmed_messages[-1:],
+        "logs": logs,
     }
 
 
@@ -263,6 +422,7 @@ async def nodeCallLLM(state: ConversationGraphState) -> ConversationGraphOutput:
         "reasoning_content": "",
     }
     messages = state.get("messages") or []
+    conversation_summary = (state.get("conversation_summary") or "").strip()
 
     current_timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     CONVERSATION_SYSTEM_PROMPT = await getPrompt(
@@ -297,7 +457,7 @@ async def nodeCallLLM(state: ConversationGraphState) -> ConversationGraphOutput:
 
     # 重大改动：完全不从 db 召回这两个低语境依赖的信息，避免和 persona 重复注入
     # low_context_depended_feeds = f"**注意**：以下信息作为关系与人物画像的补充。\n\n# 核心价值观与思维方式：\n{state['recalled_personalities_from_db']}\n\n# 沟通风格与反应模式：\n{state['recalled_interaction_styles_from_db']}"
-    high_context_depended_feeds = f"**注意**：以下信息仅供参考，只有和当前语境相关时需要使用，否则请忽略。\n\n# 人生经历和重要故事：\n{state['recalled_memories_from_db']}\n\n# 核心程序性知识（ta怎么做事、工作方法）：\n{state['recalled_procedural_infos_from_db']}\n"
+    high_context_depended_feeds = f"**注意**：以下信息仅供参考，只有和当前语境相关时需要使用，否则请忽略。\n\n# 人生经历和重要故事：\n{state.get('recalled_memories_from_db', '')}\n\n# 核心程序性知识（ta怎么做事、工作方法）：\n{state.get('recalled_procedural_infos_from_db', '')}\n"
 
     messages_to_send = [
         # 1. 系统提示词
@@ -311,7 +471,14 @@ async def nodeCallLLM(state: ConversationGraphState) -> ConversationGraphOutput:
         # SystemMessage(
         #     content=f"可能参考的召回的长期记忆：\n{json.dumps(state['recalled_facts_from_viking'], ensure_ascii=False)}"
         # ),
-    ] + messages
+    ]
+    # 5. 更早对话的滚动摘要
+    if conversation_summary != "":
+        messages_to_send.append(
+            SystemMessage(content=f"以下是更早对话的摘要：\n{conversation_summary}")
+        )
+    # 6. 本轮消息 + 短期记忆
+    messages_to_send += messages
 
     # 使用 Ark SDK 替换 LangChain ainvoke 拿reasoning_content
     # llm: ChatOpenAI = prepareLLM(model="DOUBAO_2_0_LITE", options={
@@ -334,7 +501,6 @@ async def nodeCallLLM(state: ConversationGraphState) -> ConversationGraphOutput:
     )
     output = resp["output"]
     reasoning_content = resp["reasoning_content"]
-    ai_message = resp["ai_message"]
 
     try:
         parsed_output = json.loads(output)
@@ -382,18 +548,33 @@ async def nodeCallLLM(state: ConversationGraphState) -> ConversationGraphOutput:
             "logs": logs,
         }
 
-    llm_output["messages_to_send"] = parsed_output.get("messages_to_send", [])
+    raw_messages = parsed_output.get("messages_to_send", [])
+
+    if raw_messages is None:
+        figure_messages_this_round = []
+    elif isinstance(raw_messages, str):
+        figure_messages_this_round = [raw_messages]
+    elif isinstance(raw_messages, list):
+        figure_messages_this_round = [m for m in raw_messages if isinstance(m, str)]
+    else:
+        figure_messages_this_round = []
+
+    llm_output["messages_to_send"] = figure_messages_this_round
     llm_output["reasoning_content"] = reasoning_content or ""
 
-    # parse成功写入short-term memory
-    next_messages = messages + [ai_message]
+    # AI 回复写入 short-term memory
+    next_messages = messages
+    if figure_messages_this_round:
+        next_messages = messages + [
+            AIMessage(content="\n".join(figure_messages_this_round))
+        ]
     logs += [
         {
             "step": "nodeCallLLM",
             "status": "ok",
             "detail": "LLM response generated",
             "data": {
-                "messages_to_send_count": len(llm_output["messages_to_send"]),
+                "messages_to_send_count": len(figure_messages_this_round),
             },
         }
     ]
