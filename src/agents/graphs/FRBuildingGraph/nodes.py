@@ -513,7 +513,18 @@ async def nodePlanFRIntrinsicUpdate(state: FRBuildingGraphState) -> dict:
                 new_value=json.dumps(new_list),
             )
             # 对于 FR 内在字段判断，直接更新，无需考虑冲突落库
-            final_value = list(LLM_compare_res.get("final_value"))
+            llm_final_value = LLM_compare_res.get("final_value")
+            final_value = (
+                list(llm_final_value)
+                if isinstance(llm_final_value, list)
+                else existing_list
+            )
+            # 这两个字段有最大长度限制
+            if field in ("words_figure2user", "words_user2figure"):
+                final_value = final_value[
+                    : int(os.getenv("MAX_WORDS_TO_AND_FROM_FIGURE", "100"))
+                ]
+
             planned_updates[field] = final_value
             plan_actions.append(
                 {
