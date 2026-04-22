@@ -21,11 +21,13 @@ from datetime import datetime, timezone
 from src.database.enums import (
     MBTI,
     AnalysisType,
+    ConflictStatus,
     FigureRole,
-    FineGrainedInfoConfidence,
-    FineGrainedInfoDimension,
+    FineGrainedFeedConfidence,
+    FineGrainedFeedDimension,
     Gender,
     UserLevel,
+    OriginalSourceType,
 )
 
 
@@ -96,14 +98,14 @@ class User(Base, SerializableMixin):
     username = Column(
         String(64), unique=True, nullable=False, index=True, comment="用户唯一用户名"
     )
-    password = Column(String(128), nullable=False, comment="用户密码")
+    password = Column(Text, nullable=False, comment="用户密码")
     nickname = Column(String(64), nullable=True, index=True, comment="用户昵称")
     gender = Column(Enum(Gender), nullable=False, comment="用户性别")
-    email = Column(String(128), nullable=True, unique=True, comment="用户邮箱")
+    email = Column(Text, nullable=True, unique=True, comment="用户邮箱")
     level = Column(Enum(UserLevel), default=UserLevel.L4, comment="用户等级")
 
     lark_open_id = Column(
-        String(128), nullable=True, unique=True, comment="用户飞书open_id"
+        Text, nullable=True, unique=True, comment="用户飞书open_id"
     )
     created_at = Column(
         DateTime, default=datetime.now(timezone.utc), comment="用户创建时间"
@@ -136,7 +138,7 @@ class FigureAndRelation(Base, SerializableMixin):
     figure_role = Column(
         Enum(FigureRole),
         default=FigureRole.STRANGER,
-        nullable=True,
+        nullable=False,
         comment="Figure 角色",
     )
     # Figure 基本信息
@@ -144,10 +146,11 @@ class FigureAndRelation(Base, SerializableMixin):
     figure_gender = Column(Enum(Gender), nullable=False, comment="Figure 性别")
     figure_mbti = Column(Enum(MBTI), nullable=True, comment="Figure MBTI 类型")
     figure_birthday = Column(Text, nullable=True, comment="Figure 生日")
-    figure_occupation = Column(String(128), nullable=True, comment="Figure 职业")
-    figure_education = Column(String(128), nullable=True, comment="Figure 教育背景")
-    figure_residence = Column(String(128), nullable=True, comment="Figure 常住地")
-    figure_hometown = Column(String(128), nullable=True, comment="Figure 家乡地")
+    figure_occupation = Column(Text, nullable=True, comment="Figure 职业")
+    figure_education = Column(Text, nullable=True, comment="Figure 教育背景")
+    figure_residence = Column(Text, nullable=True, comment="Figure 常住地")
+    figure_hometown = Column(Text, nullable=True, comment="Figure 家乡地")
+    figure_appearance = Column(Text, nullable=True, comment="Figure 外在特征")
     figure_likes = Column(
         MutableList.as_mutable(ARRAY(Text)),
         nullable=False,
@@ -159,12 +162,6 @@ class FigureAndRelation(Base, SerializableMixin):
         nullable=False,
         default=[],
         comment="Figure 不喜欢",
-    )
-    figure_appearance = Column(
-        MutableList.as_mutable(ARRAY(Text)),
-        nullable=False,
-        default=[],
-        comment="Figure 外在特征",
     )
 
     # 重要：双方对彼此的语言风格，决定虚拟形象准确与否的关键
@@ -237,7 +234,7 @@ class FigureAndRelation(Base, SerializableMixin):
         return f"<FigureAndRelation {self.name}>"
 
 
-class FineGrainedInfoPiece(Base, SerializableMixin):
+class FineGrainedFeed(Base, SerializableMixin):
     """细粒度信息，包含：
     性格与价值观 personality、
     互动风格 interaction_style、
@@ -247,11 +244,11 @@ class FineGrainedInfoPiece(Base, SerializableMixin):
     【支持向量化召回】
     """
 
-    __tablename__ = "fine_grained_info_piece"
+    __tablename__ = "fine_grained_feed"
     # 使用HNSW索引加速余弦相似度向量检索
     __table_args__ = (
         Index(
-            "ix_fine_grained_info_piece_embedding_hnsw",
+            "ix_fine_grained_feed_embedding_hnsw",
             "embedding",
             postgresql_using="hnsw",
             postgresql_ops={"embedding": "vector_cosine_ops"},
@@ -267,7 +264,7 @@ class FineGrainedInfoPiece(Base, SerializableMixin):
     )
     figure_and_relation = relationship(
         "FigureAndRelation",
-        backref="fine_grained_info_pieces",
+        backref="fine_grained_feeds",
         lazy="select",
     )
     original_source_id = Column(
@@ -278,12 +275,12 @@ class FineGrainedInfoPiece(Base, SerializableMixin):
     )
     original_source = relationship(
         "OriginalSource",
-        backref="fine_grained_info_pieces",
+        backref="fine_grained_feeds",
         lazy="select",  # 关联查询原始输入材料时，只查询关联的原始输入材料，不查询所有原始输入材料
     )
 
     dimension = Column(
-        Enum(FineGrainedInfoDimension),
+        Enum(FineGrainedFeedDimension),
         nullable=False,
         comment="维度",
     )
@@ -293,7 +290,7 @@ class FineGrainedInfoPiece(Base, SerializableMixin):
         comment="子维度",
     )
     confidence = Column(
-        Enum(FineGrainedInfoConfidence),
+        Enum(FineGrainedFeedConfidence),
         nullable=False,
         comment="证据级别",
     )
@@ -302,7 +299,7 @@ class FineGrainedInfoPiece(Base, SerializableMixin):
 
     # 向量化
     embedding_model_name = Column(
-        String(128),
+        Text,
         nullable=False,
         comment="Embedding 模型名称",
     )
@@ -327,11 +324,11 @@ class FineGrainedInfoPiece(Base, SerializableMixin):
     )
 
     def __repr__(self):
-        return f"<FineGrainedInfoPiece {self.id}>"
+        return f"<FineGrainedFeed {self.id}>"
 
 
 class OriginalSource(Base, SerializableMixin):
-    """原始输入材料"""
+    """原始信息来源（经预处理后）"""
 
     __tablename__ = "original_source"
 
@@ -349,16 +346,21 @@ class OriginalSource(Base, SerializableMixin):
     )
 
     # 元数据
+    type = Column(
+        Enum(OriginalSourceType),
+        nullable=False,
+        comment="来源类型",
+    )
     approx_date = Column(
         String(32), nullable=True, comment="大致日期：2025-Q3 / 2026-01-15"
     )
     confidence = Column(
-        Enum(FineGrainedInfoConfidence),
+        Enum(FineGrainedFeedConfidence),
         nullable=False,
         comment="证据级别",
     )
     included_dimensions = Column(
-        ARRAY(Enum(FineGrainedInfoDimension)),
+        ARRAY(Enum(FineGrainedFeedDimension)),
         nullable=False,
         comment="涉及维度",
     )
@@ -386,10 +388,10 @@ class OriginalSource(Base, SerializableMixin):
         return f"<OriginalSource {self.id}>"
 
 
-class FineGrainedInfoConflict(Base, SerializableMixin):
+class FineGrainedFeedConflict(Base, SerializableMixin):
     """细粒度信息冲突记录"""
 
-    __tablename__ = "fine_grained_info_conflict"
+    __tablename__ = "fine_grained_feed_conflict"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     fr_id = Column(
@@ -400,34 +402,123 @@ class FineGrainedInfoConflict(Base, SerializableMixin):
     )
     figure_and_relation = relationship(
         "FigureAndRelation",
-        backref="fine_grained_info_conflicts",
+        backref="fine_grained_feed_conflicts",
         lazy="select",
     )
 
     dimension = Column(
-        Enum(FineGrainedInfoDimension),
+        Enum(FineGrainedFeedDimension),
         nullable=False,
         comment="冲突所在维度",
     )
-    piece_ids = Column(
+    feed_ids = Column(
         MutableList.as_mutable(ARRAY(Integer)),
         nullable=False,
-        comment="冲突的细粒度信息片段ID列表",
+        comment="冲突的细粒度信息ID列表",
     )
-    description = Column(Text, nullable=False, comment="冲突内容描述")
-    resolved = Column(Boolean, default=False, comment="是否已解决")
-    resolution = Column(Text, nullable=True, comment="解决方案")
+    old_value = Column(Text, nullable=False, comment="原有值")
+    new_value = Column(Text, nullable=False, comment="新值")
+    conflict_detail = Column(Text, nullable=False, comment="冲突详情")
+    status = Column(
+        Enum(ConflictStatus),
+        nullable=False,
+        default=ConflictStatus.PENDING,
+        comment="冲突状态",
+    )
 
     created_at = Column(
         DateTime, default=datetime.now(timezone.utc), comment="创建时间"
     )
 
     def __repr__(self):
-        return f"<FineGrainedInfoConflict {self.id}>"
+        return f"<FineGrainedFeedConflict {self.id}>"
+
+
+class FROverallUpdateLog(Base, SerializableMixin):
+    """FR 相关所有信息变动日志（包含 fr 内在字段和 feed 变动）"""
+
+    __tablename__ = "fr_overall_update_log"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    fr_id = Column(
+        Integer,
+        ForeignKey("figure_and_relation.id"),
+        nullable=False,
+        comment="关联的 FigureAndRelation ID",
+    )
+    figure_and_relation = relationship(
+        "FigureAndRelation",
+        backref="fr_overall_update_logs",
+        lazy="select",
+    )
+
+    update_field_or_sub_dimension = Column(
+        Text,
+        nullable=False,
+        default="",
+        comment="变动字段（fr 内在字段变动）或子维度（feed 变动）",
+    )
+    update_dimension = Column(
+        Enum(FineGrainedFeedDimension),
+        nullable=True,
+        comment="变动维度（只有 feed 变动时存在）",
+    )
+    old_value = Column(
+        Text,
+        nullable=True,
+        comment="变动前的值",
+    )
+    new_value = Column(
+        Text,
+        nullable=True,
+        comment="变动后的值",
+    )
+
+    created_at = Column(
+        DateTime,
+        default=datetime.now(timezone.utc),
+        comment="变动时间",
+    )
+
+    def __repr__(self):
+        return f"<FROverallUpdateLog {self.id}>"
+
+
+class FRBuildingGraphReport(Base, SerializableMixin):
+    """FR 构建报告"""
+
+    __tablename__ = "fr_building_graph_report"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    fr_id = Column(
+        Integer,
+        ForeignKey("figure_and_relation.id"),
+        nullable=False,
+        comment="关联的 FigureAndRelation ID",
+    )
+    figure_and_relation = relationship(
+        "FigureAndRelation",
+        backref="fr_building_graph_reports",
+        lazy="select",
+    )
+
+    report = Column(Text, nullable=False, comment="构建报告")
+    is_deleted = Column(
+        Boolean,
+        nullable=False,
+        default=False,
+        comment="是否删除",
+    )
+    created_at = Column(
+        DateTime,
+        default=datetime.now(timezone.utc),
+        comment="构建报告创建时间",
+    )
+
+    def __repr__(self):
+        return f"<FRBuildingGraphReport {self.id}>"
 
 
 class Knowledge(Base, SerializableMixin):
-    """静态知识库"""
+    """私有知识库"""
 
     __tablename__ = "knowledge"
     # 使用HNSW索引加速余弦相似度向量检索
@@ -441,6 +532,12 @@ class Knowledge(Base, SerializableMixin):
     )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
+
+    user_id = Column(
+        Integer, ForeignKey("user.id"), nullable=False, comment="创建的用户ID"
+    )
+    user = relationship("User", backref="knowledge_pieces")
+
     content = Column(Text, nullable=False, comment="知识内容")
     weight = Column(
         Float, nullable=False, index=True, default=1.0, comment="知识权重（重要性）"
@@ -448,7 +545,7 @@ class Knowledge(Base, SerializableMixin):
 
     # 向量化
     embedding_model_name = Column(
-        String(128),
+        Text,
         nullable=False,
         comment="Embedding 模型名称",
     )
@@ -456,6 +553,12 @@ class Knowledge(Base, SerializableMixin):
         Vector(1024), nullable=False, comment="向量表示"
     )  # 重要：模型只支持1024、2048维向量，但hnsw索引要求维度必须小于2000
 
+    is_deleted = Column(
+        Boolean,
+        nullable=False,
+        default=False,
+        comment="是否删除",
+    )
     created_at = Column(
         DateTime,
         default=datetime.now(timezone.utc),
