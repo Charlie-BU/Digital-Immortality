@@ -29,7 +29,7 @@ def registerFRSubparser(
     """
     # fr
     fr_parser = subparsers.add_parser("fr", help="FigureAndRelation commands")
-    fr_parser.usage = "immortality fr {add, list, show, sync_feeds} [-h]"
+    fr_parser.usage = "immortality fr {add, list, show, sync-feeds} [-h]"
     fr_subparsers = fr_parser.add_subparsers(dest="fr_command")
 
     # fr add
@@ -71,12 +71,12 @@ def registerFRSubparser(
     )
     fr_show_parser.set_defaults(func=showFRCLI)
 
-    # fr sync_feeds
+    # fr sync-feeds
     fr_sync_feeds_parser = fr_subparsers.add_parser(
-        "sync_feeds",
+        "sync-feeds",
         help="Sync fine-grained feeds (personality / interaction style / procedural info / memory detail) to FR core fields",
     )
-    fr_sync_feeds_parser.usage = "immortality fr sync_feeds [--id <id>] [-h] [--json]"
+    fr_sync_feeds_parser.usage = "immortality fr sync-feeds [--id <id>] [-h] [--json]"
     add_json(fr_sync_feeds_parser)
     fr_sync_feeds_parser.add_argument(
         "--id",
