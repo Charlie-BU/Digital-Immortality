@@ -865,7 +865,7 @@ async def syncFeedsToFRCore(
             db.rollback()
             logger.error(f"syncFeedsToFRCore db update failed: {str(e)}")
             return {"status": -5, "message": "Sync FR core failed"}
-
+            
     return {
         "status": 200,
         "message": "Sync FR core success",

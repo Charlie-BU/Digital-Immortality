@@ -10,9 +10,10 @@ def parserBuilder() -> argparse.ArgumentParser:
     from src.cli.commands.auth import registerAuthSubparser
     from src.cli.commands.fr import registerFRSubparser
     from src.cli.commands.index import registerTopSubparser
+    from src.cli.commands.lark_service import registerLarkServiceSubparser
 
     parser = argparse.ArgumentParser(prog="immortality")
-    parser.usage = "immortality {doctor, auth, fr} ... [-h] [--json]"
+    parser.usage = "immortality {doctor, auth, fr, lark-service} ... [-h] [--json]"
     parser.add_argument("--json", action="store_true", help="Output in JSON format")
 
     subparsers = parser.add_subparsers(dest="command")
@@ -23,6 +24,7 @@ def parserBuilder() -> argparse.ArgumentParser:
     registerTopSubparser(subparsers, add_json)
     registerAuthSubparser(subparsers, add_json)
     registerFRSubparser(subparsers, add_json)
+    registerLarkServiceSubparser(subparsers, add_json)
 
     return parser
 
