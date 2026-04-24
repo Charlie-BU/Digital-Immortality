@@ -13,6 +13,7 @@ wheels/
 .langgraph_api
 .vscode
 .trae
+.VSCodeCounter
 
 # Alembic migrations
 alembic.ini
