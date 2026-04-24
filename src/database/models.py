@@ -104,9 +104,7 @@ class User(Base, SerializableMixin):
     email = Column(Text, nullable=True, unique=True, comment="用户邮箱")
     level = Column(Enum(UserLevel), default=UserLevel.L4, comment="用户等级")
 
-    lark_open_id = Column(
-        Text, nullable=True, unique=True, comment="用户飞书open_id"
-    )
+    lark_open_id = Column(Text, nullable=True, unique=True, comment="用户飞书open_id")
     created_at = Column(
         DateTime, default=datetime.now(timezone.utc), comment="用户创建时间"
     )
@@ -635,3 +633,24 @@ class Analysis(Base, SerializableMixin):
 
     def __repr__(self):
         return f"<Analysis {self.id}>"
+
+
+def initDatabaseIfNeeded():
+    """
+    一键初始化创建数据库表
+    """
+    import logging
+    from src.database.index import _buildEngine
+
+    logger = logging.getLogger(__name__)
+    logger.info("Checking if database needs to be initialized...")
+    engine = _buildEngine()
+    try:
+        inspector = inspect(engine)
+        if not inspector.get_table_names():
+            Base.metadata.create_all(bind=engine)
+            logger.info("Database initialized successfully\n")
+        else:
+            logger.info("No need to initialize database\n")
+    finally:
+        engine.dispose()
