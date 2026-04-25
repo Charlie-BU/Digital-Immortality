@@ -8,10 +8,6 @@ from vikingdb import APIKey
 from vikingdb.memory import VikingMem
 from vikingdb.exceptions import VikingException
 
-import dotenv
-
-dotenv.load_dotenv()
-
 
 def init_memory_client():
     """初始化记忆库客户端"""
