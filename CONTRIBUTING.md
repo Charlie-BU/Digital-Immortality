@@ -25,8 +25,10 @@
 
 1. 切换到 `main`
 2. `git pull --ff-only origin main`
-3. 创建 `vX.Y.Z` tag
-4. 推送 tag 到 `origin`
+3. 自动将 `pyproject.toml` 的 `version` 更新为目标版本并提交
+4. `uv build` + `uvx twine check dist/*` 校验包
+5. 创建 `vX.Y.Z` tag
+6. 推送 `main` 和 tag 到 `origin`
 
 使用示例：
 
