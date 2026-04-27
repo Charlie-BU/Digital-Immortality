@@ -488,7 +488,7 @@ async def recallFineGrainedFeeds(
                 grouped_by_dimension: dict[str, list[dict]] = {}
                 for item in per_scope_results[:scope_top_k]:
                     fine_grained_feed = item.get("fine_grained_feed") or {}
-                    dimension = fine_grained_feed.get("dimension").value
+                    dimension = fine_grained_feed.get("dimension")
                     if not isinstance(dimension, str) or dimension == "":
                         continue
                     grouped_by_dimension.setdefault(dimension, []).append(item)
