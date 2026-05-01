@@ -39,7 +39,7 @@ def prepareLLM(
     model_args = {
         "model": model_name,
         "api_key": api_key,
-        "base_url": ARK_BASE_URL,
+        "HTTP_BASE_URL": ARK_BASE_URL,
     }
     callbacks = []
     options = options or {}

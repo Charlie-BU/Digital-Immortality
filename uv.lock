@@ -516,7 +516,7 @@ wheels = [
 
 [[package]]
 name = "digital-immortality"
-version = "1.5.3"
+version = "1.2.2"
 source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },

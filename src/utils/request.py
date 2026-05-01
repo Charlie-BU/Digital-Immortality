@@ -8,7 +8,7 @@ class FetchRes(TypedDict):
     body: dict
 
 
-async def fetch(
+async def afetch(
     url,
     method="GET",
     query_params=None,
@@ -18,6 +18,10 @@ async def fetch(
     timeout=30,
     raise_for_status=True,
 ) -> FetchRes:
+    """
+    异步发起 HTTP 请求
+    """
+
     timeout_config = aiohttp.ClientTimeout(total=timeout) if timeout else None
     async with aiohttp.ClientSession(timeout=timeout_config) as session:
         async with session.request(

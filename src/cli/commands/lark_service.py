@@ -3,7 +3,7 @@ from typing import Callable
 
 from src.cli.commands.index import runDoctorCheck
 from src.cli.utils import (
-    getUserIdFromLocalSession,
+    getCurrentUserFromLocalSession,
     immortalityPrint,
     printServiceResInCLI,
 )
@@ -39,9 +39,10 @@ def startLarkServiceCLI(args: Namespace) -> int:
     from src.main import main
 
     # 登录校验
-    getUserIdFromLocalSession()
-
+    getCurrentUserFromLocalSession()
+    # 健康校验
     doctor_result = runDoctorCheck()
+
     if doctor_result.get("status") != 200:
         printServiceResInCLI(doctor_result, as_json=args.json)
         if not args.json:

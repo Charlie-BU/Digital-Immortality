@@ -135,6 +135,7 @@ def runDoctorCheck() -> dict[str, Any]:
         )
 
     required_envs = [
+        "USE_SHARED_DATABASE",
         "DATABASE_URI",
         "CHECKPOINT_DATABASE_URI",
         "ALGORITHM",
@@ -188,6 +189,9 @@ def runDoctorCheck() -> dict[str, Any]:
         "WAITING_SECONDS_FOR_CONVERSATION",
     ]
     env_values: dict[str, str] = {}
+
+    use_shared_database = False
+    use_shared_database_raw = ""
     if env_exists:
         try:
             for line in env_path.read_text(encoding="utf-8").splitlines():
@@ -203,8 +207,51 @@ def runDoctorCheck() -> dict[str, Any]:
                 "Failed to parse `.env`. Please check the format (`KEY=VALUE`)."
             )
 
+        use_shared_database_raw = (
+            env_values.get("USE_SHARED_DATABASE", "") or ""
+        ).strip()
+        if use_shared_database_raw.lower() == "true":
+            use_shared_database = True
+            checks.append(
+                {
+                    "item": "env:USE_SHARED_DATABASE",
+                    "ok": True,
+                    "value": use_shared_database_raw,
+                }
+            )
+        elif use_shared_database_raw.lower() == "false":
+            use_shared_database = False
+            checks.append(
+                {
+                    "item": "env:USE_SHARED_DATABASE",
+                    "ok": True,
+                    "value": use_shared_database_raw or "False",
+                }
+            )
+        else:
+            checks.append(
+                {
+                    "item": "env:USE_SHARED_DATABASE",
+                    "ok": False,
+                    "error": "Invalid value",
+                    "value": use_shared_database_raw,
+                }
+            )
+            healthy = False
+            guidance.append(
+                "Invalid USE_SHARED_DATABASE value. Please re-run `immortality setup`."
+            )
+
+    required_envs_to_check = required_envs
+    if use_shared_database:
+        required_envs_to_check = [
+            key
+            for key in required_envs
+            if key not in {"DATABASE_URI", "CHECKPOINT_DATABASE_URI"}
+        ]
+
     missing_envs: list[str] = []
-    for key in required_envs:
+    for key in required_envs_to_check:
         value = env_values.get(key, "") if env_exists else ""
         ok = isinstance(value, str) and value.strip() != ""
         checks.append({"item": f"env:{key}", "ok": ok})
@@ -259,23 +306,33 @@ def runDoctorCheck() -> dict[str, Any]:
             "Dependencies are incomplete. Please run `uv sync` (or `uv pip install -e .`)."
         )
 
-    # 4) 数据库可用性检查
-    db_ok = True
-    db_error = None
-    try:
-        with session() as db:
-            db.execute(text("SELECT 1"))
-    except Exception as err:
-        db_ok = False
-        db_error = str(err)
-        healthy = False
-
-    checks.append({"item": "database:connectivity", "ok": db_ok, "error": db_error})
-    if not db_ok:
-        guidance.append(
-            "Database connection failed. Please check `DATABASE_URI`, network, and DB service status. "
-            "If you selected Docker mode in setup, ensure postgres container is running."
+    # 4) 数据库可用性检查（共享数据库模式下跳过）
+    if use_shared_database:
+        checks.append(
+            {
+                "item": "database:connectivity",
+                "ok": True,
+                "skipped": True,
+                "detail": "Skipped because USE_SHARED_DATABASE=True",
+            }
         )
+    else:
+        db_ok = True
+        db_error = None
+        try:
+            with session() as db:
+                db.execute(text("SELECT 1"))
+        except Exception as err:
+            db_ok = False
+            db_error = str(err)
+            healthy = False
+
+        checks.append({"item": "database:connectivity", "ok": db_ok, "error": db_error})
+        if not db_ok:
+            guidance.append(
+                "Database connection failed. Please check `DATABASE_URI`, network, and DB service status. "
+                "If you selected Docker mode in setup, ensure postgres container is running."
+            )
 
     return {
         "status": 200 if healthy else -1,
@@ -546,8 +603,11 @@ def setupCLI(args: Namespace) -> int:
     database_config_mode = questionary.select(
         "Choose database configuration mode",
         choices=[
-            questionary.Choice("Docker setup (recommended)", value="docker"),
-            questionary.Choice("Manual setup", value="manual"),
+            questionary.Choice(
+                "Easy setup (Use cloud database with encrypted data)", value="easy"
+            ),
+            questionary.Choice("Docker setup", value="docker"),
+            questionary.Choice("Manual setup (Unrecommended)", value="manual"),
         ],
     ).ask()
     if database_config_mode is None:
@@ -560,11 +620,14 @@ def setupCLI(args: Namespace) -> int:
     arg_ark_api_key = getattr(args, "ark_api_key", None)
     arg_doubao_2_0_lite = getattr(args, "doubao_2_0_lite", None)
     arg_doubao_2_0_mini = getattr(args, "doubao_2_0_mini", None)
-    arg_embedding_endpoint_id = getattr(args, "embedding_model_endpoint_or_model_id", None)
+    arg_embedding_endpoint_id = getattr(
+        args, "embedding_model_endpoint_or_model_id", None
+    )
     arg_lark_app_id = getattr(args, "lark_app_id", None)
     arg_lark_app_secret = getattr(args, "lark_app_secret", None)
     arg_lark_card_template_id = getattr(args, "lark_card_template_id", None)
 
+    # 用户选择 Docker setup
     if database_config_mode == "docker":
         docker_db_values = dockerDBSteup()
         arg_db_user = arg_db_user or docker_db_values["db_user"]
@@ -572,11 +635,21 @@ def setupCLI(args: Namespace) -> int:
         arg_db_host = arg_db_host or docker_db_values["db_host"]
         arg_db_port = arg_db_port or docker_db_values["db_port"]
 
-    # 若通过 docker 配置数据库，db 配置无需手动交互
-    db_user = _resolveText(arg_db_user, "db_user")
-    db_password = _resolveSecret(arg_db_password, "db_password")
-    db_host = _resolveText(arg_db_host, "db_host")
-    db_port = _resolveText(arg_db_port, "db_port")
+    # 用户选择 Easy setup
+    use_shared_database = False
+    if database_config_mode == "easy":
+        use_shared_database = True
+
+    # easy 模式下不采集 DB 参数；其余模式保持原逻辑
+    db_user = ""
+    db_password = ""
+    db_host = ""
+    db_port = ""
+    if not use_shared_database:
+        db_user = _resolveText(arg_db_user, "db_user")
+        db_password = _resolveSecret(arg_db_password, "db_password")
+        db_host = _resolveText(arg_db_host, "db_host")
+        db_port = _resolveText(arg_db_port, "db_port")
 
     login_secret = uuid.uuid4().hex
     ark_api_key = _resolveSecret(arg_ark_api_key, "ark_api_key")
@@ -623,10 +696,15 @@ def setupCLI(args: Namespace) -> int:
             raise CLIError(
                 f"Cannot load `.env.example` template from package: {err}", exit_code=1
             ) from err
+
+    # 写入 .env 文件
     output = template
     for key, value in values.items():
         output = output.replace(f"<{key}>", value)
-
+    output = output.replace(
+        "USE_SHARED_DATABASE=False",
+        f"USE_SHARED_DATABASE={'True' if use_shared_database else 'False'}",
+    )
     try:
         env_path.write_text(output, encoding="utf-8")
     except OSError as err:
@@ -634,8 +712,9 @@ def setupCLI(args: Namespace) -> int:
             f"Cannot write env file `{env_path}`: {err}", exit_code=1
         ) from err
 
-    # 初始化数据库表
-    initDatabaseIfNeeded()
+    # 非共享数据库模式下初始化数据库表
+    if not use_shared_database:
+        initDatabaseIfNeeded()
     printServiceResInCLI(
         {
             "status": 200,

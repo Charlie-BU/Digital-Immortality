@@ -52,7 +52,7 @@ docker-compose --version
 uv tool install digital-immortality --default-index https://pypi.org/simple
 ```
 
-未安装 `uv`：
+未安装 `uv`，使用 `pip`：
 
 ```bash
 pip install digital-immortality -i https://pypi.org/simple
