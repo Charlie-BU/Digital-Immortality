@@ -194,3 +194,52 @@
 ### 建议 Commit Message（git-cz）
 
 - `feat(auth): add lark open_id relogin and unify current session access`
+
+## CHANGELOG - 2026-05-10 00:34 - Python 最低版本统一提升至 3.12 并同步发布链路
+
+### 撰写时间
+
+- 2026-05-10 00:34
+
+### Base Commit
+
+- 751bd2da74d98a7681e6c4b28ce5fd523583fc0e
+
+### Compare Scope
+
+- working_tree_only
+
+### 背景与改动目标
+
+- 这次改动的核心目标很直接：把项目里“Python 最低版本”从 `3.11` 统一提升到 `3.12`，避免文档、运行时校验、打包元数据和 CI 配置出现口径不一致。
+- 一开始我们只看到包元数据里的 `requires-python`，但如果只改这一处，CLI 的 `doctor` 提示和 README 仍会继续引导用户使用 `3.11`，最终会造成“规范已变更、入口提示未同步”的体验割裂。因此这轮改动按链路做了同步收口。
+
+### 改动概览
+
+- 包与锁文件：`pyproject.toml`、`uv.lock` 的 `requires-python` 均从 `>=3.11` 调整为 `>=3.12`。
+- 运行时校验：`src/cli/commands/index.py` 的 `min_py` 从 `(3, 11)` 提升到 `(3, 12)`，并同步更新失败提示文案。
+- 文档口径：`README.md` 中“环境准备”和 `doctor` 检查项的版本描述同步改为 `3.12`；`docs/HEARTCOMPASS.md` 的 `langgraph.json` 示例 `python_version` 改为 `"3.12"`。
+- 发布链路：`.github/workflows/publish.yml` 的 `actions/setup-python` 从 `3.11` 调整为 `3.12`，保证打包与发布作业不再基于旧版本。
+- 资产补充：`.trae/skills/commit-update-writer/SKILL.md` 触发词补充了 `changelog`，让“生成本次 changelog”可以被更稳定地路由到该 skill。
+
+### 关键链路解析（含上下游）
+
+- 上游依赖：安装与解析入口依赖 `pyproject.toml`/`uv.lock` 的 `requires-python` 约束；开发与发布入口依赖 GitHub Actions 的 Python 解释器版本。
+- 当前改动：在元数据、CLI 校验、用户文档、CI 四个层面同时把最低版本切到 `3.12`，并保持提示文案与实际校验逻辑一致。
+- 下游影响：本地安装、`immortality doctor`、以及发布流水线现在都以 `3.12` 为基准；仍使用 `3.11` 的环境会更早在安装或健康检查阶段暴露不满足约束，而不是在运行时隐式失败。
+
+### 改动结果与业务影响
+
+- 当前收益是“版本约束单一事实源”更清晰：用户看到的文档、CLI 报错、构建元数据和 CI 行为已经对齐到同一最低版本。
+- 对维护侧的好处是减少排障分歧。后续遇到环境问题时，团队不再需要先确认“到底以 README、doctor 还是 CI 为准”，因为三者口径一致。
+- 代价是兼容边界收窄：仍在 `Python 3.11` 的开发机/执行环境需要升级到 `3.12` 才能继续走标准流程。
+
+### 风险与待办
+
+- 已知风险：本次是配置与文案对齐，没有覆盖完整运行回归；若某些依赖在 `3.12` 下存在边缘兼容问题，需要在真实安装链路中进一步验证。
+- 未验证项：未执行完整的“新环境从零安装 + `uv sync` + `immortality doctor` + 发布作业”端到端校验。
+- 后续动作：建议在 CI 中新增一条最小健康检查（安装并运行 `immortality doctor` 关键分支），把版本升级后的行为验证前置到流水线。
+
+### 建议 Commit Message（git-cz）
+
+- `build(python): raise minimum supported version to 3.12`

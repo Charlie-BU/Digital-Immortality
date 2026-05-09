@@ -110,7 +110,7 @@ def runDoctorCheck() -> dict[str, Any]:
     # 1) Python 版本检查
     python_ok = True
     python_detail = ""
-    min_py = (3, 11)
+    min_py = (3, 12)
     current = (sys.version_info.major, sys.version_info.minor)
     python_ok = current >= min_py
     python_detail = (
@@ -121,7 +121,7 @@ def runDoctorCheck() -> dict[str, Any]:
     healthy = healthy and python_ok
     if not python_ok:
         guidance.append(
-            "Python version does not meet requirements. Please use `>=3.11`."
+            "Python version does not meet requirements. Please use `>=3.12`."
         )
 
     # 2) .env 文件存在性与必填项完整性检查
