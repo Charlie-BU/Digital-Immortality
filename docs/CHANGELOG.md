@@ -1,4 +1,4 @@
-## UPDATE - 2026-05-05 01:19 - Service 解耦收口与 Graph/Lark 链路对齐
+## CHANGELOG - 2026-05-05 01:19 - Service 解耦收口与 Graph/Lark 链路对齐
 
 ### 撰写时间
 
@@ -54,7 +54,7 @@
 
 - `refactor(service): align graph and lark flows with service-only data access`
 
-## UPDATE - 2026-05-05 15:14 - FRBuildingGraph 并发收口与提交质检文档补强
+## CHANGELOG - 2026-05-05 15:14 - FRBuildingGraph 并发收口与提交质检文档补强
 
 ### 撰写时间
 
@@ -99,7 +99,7 @@
 
 - `feat(graph): guard FR building graph against concurrent runs`
 
-## UPDATE - 2026-05-07 19:06 - 文档体系补全与 Harness 约束沉淀
+## CHANGELOG - 2026-05-07 19:06 - 文档体系补全与 Harness 约束沉淀
 
 ### 撰写时间
 
@@ -144,7 +144,7 @@
 
 - `docs(harness): enrich project docs and align writing rules`
 
-## UPDATE - 2026-05-08 18:51 - 会话校验扩展为当前用户信息并补齐飞书自动续登链路
+## CHANGELOG - 2026-05-08 18:51 - 会话校验扩展为当前用户信息并补齐飞书自动续登链路
 
 ### 撰写时间
 
