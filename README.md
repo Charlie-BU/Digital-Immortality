@@ -343,10 +343,18 @@ immortality doctor
 
 理论上此时应通过所有检查项；若未通过，请按输出中的 `guidance` 逐项修复。
 
-## CLI 登录
+## CLI 注册或登录
+
+若没有 digital-immortality 账号，需先注册，再进行登录。
 
 ```bash
-immortality login
+immortality auth register
+```
+
+若已有 digital-immortality 账号，直接登录即可。
+
+```bash
+immortality auth login
 ```
 
 ## 绑定飞书 open_id
