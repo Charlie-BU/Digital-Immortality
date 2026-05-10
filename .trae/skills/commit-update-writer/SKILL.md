@@ -1,6 +1,6 @@
 ---
 name: "commit-update-writer"
-description: "基于用户指定的改动范围（默认当前工作区）分析上下游依赖并产出改动说明，追加写入 docs/CHANGELOG.md。用户要求“生成本次改动文档/更新记录”时触发。"
+description: "基于用户指定的改动范围（默认当前工作区）分析上下游依赖并产出改动说明，追加写入 docs/CHANGELOG.md。用户要求“生成本次改动文档/更新记录/changelog”时触发。"
 ---
 
 # Commit Update Writer
@@ -10,7 +10,7 @@ description: "基于用户指定的改动范围（默认当前工作区）分析
 
 ## 触发时机
 
-- 用户要求“生成本次改动说明 / 更新日志 / 变更文档”
+- 用户要求“生成本次改动说明 / 更新日志 / 变更文档 / changelog”
 - 用户要求“基于 git diff 写 markdown 到 docs/CHANGELOG.md”
 - 用户要求“分析改动及其依赖、被依赖影响并沉淀文档”
 

@@ -7,7 +7,7 @@
 在开始前，请先满足以下任一条件：
 
 - 已安装 `uv`（推荐）
-- 已安装 `Python 3.11+` 环境
+- 已安装 `Python 3.12+` 环境
 
 安装 `uv`，请在 `terminal` 执行：
 
@@ -76,7 +76,7 @@ immortality doctor
 
 - `.env` 环境变量是否已配置
 - 数据库是否可连接
-- `Python` 版本是否满足要求（`>= 3.11`）
+- `Python` 版本是否满足要求（`>= 3.12`）
 - 依赖是否安装完整
 
 ## PostgreSQL 手动配置（不推荐）
@@ -343,10 +343,18 @@ immortality doctor
 
 理论上此时应通过所有检查项；若未通过，请按输出中的 `guidance` 逐项修复。
 
-## CLI 登录
+## CLI 注册或登录
+
+若没有 digital-immortality 账号，需先注册，再进行登录。
 
 ```bash
-immortality login
+immortality auth register
+```
+
+若已有 digital-immortality 账号，直接登录即可。
+
+```bash
+immortality auth login
 ```
 
 ## 绑定飞书 open_id
