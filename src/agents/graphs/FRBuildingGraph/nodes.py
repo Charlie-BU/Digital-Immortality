@@ -134,9 +134,11 @@ def nodeLoadFR(state: FRBuildingGraphState) -> dict:
             },
         }
     ]
+    username = user.get("username")
+    nickname = user.get("nickname", username)
     logger.info("nodeLoadFR executed finished\n")
     return {
-        "user_name": user.get("username"),
+        "user_name": f"{username}({nickname})" if username != nickname else username,
         "figure_and_relation": fr,
         "figure_role": parseEnum(FigureRole, fr.get("figure_role")),
         "logs": logs,

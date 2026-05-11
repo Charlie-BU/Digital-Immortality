@@ -291,3 +291,48 @@
 ### 建议 Commit Message（git-cz）
 
 - `fix(cli): align docker postgres readiness and checkpoints db setup`
+
+## CHANGELOG - 2026-05-11 11:14 - Graph 用户名展示统一为 username(nickname)
+
+### 撰写时间
+
+- 2026-05-11 11:14
+
+### Base Commit
+
+- 2cd2d5c18e4210bcd98d74e44c538ed1acd8f8d0
+
+### Compare Scope
+
+- working_tree_only
+
+### 背景与改动目标
+
+- 这次改动的出发点是“对话上下文里的用户称呼不够稳定”。之前 `ConversationGraph` 与 `FRBuildingGraph` 都直接把 `username` 写入 `user_name`，当昵称和账号名存在差异时，提示词和报告上下文会丢失一部分身份信息。
+- 目标是让两个 Graph 在构建 `user_name` 时保持同一规则，并让下游提示词消费到更完整的用户标识；同时顺手清理一处无实际作用的调试注释，减少链路噪音。
+
+### 改动概览
+
+- `src/agents/graphs/ConversationGraph/nodes.py`：`nodeLoadFRAndPersona` 新增 `username`/`nickname` 变量，`user_name` 统一改为 `username(nickname)`（两者相同则保留单值）。
+- `src/agents/graphs/FRBuildingGraph/nodes.py`：`nodeLoadFR` 按同样规则构建 `user_name`，保持两个 Graph 的状态语义一致。
+- `src/channels/lark/integration/menu.py`：删除 `buildPersonaLark` 内一行注释掉的调试输出（`# print(res)`），不改变流程行为。
+
+### 关键链路解析（含上下游）
+
+- 上游依赖：两处改动都依赖 `getUserById(user_id)` 返回的 `user` 字典字段（`username`、`nickname`）；规则变化发生在 Graph 的加载节点，而不是提示词模板本身。
+- 当前改动：在 `nodeLoadFRAndPersona` 与 `nodeLoadFR` 入口统一把 `user_name` 做格式化，之后继续透传到 Graph state，不改变原有执行路径与错误分支。
+- 下游影响：`ConversationGraph.nodeCallLLM` 仍通过 `state["user_name"]` 注入 `CONVERSATION_SYSTEM_PROMPT`；`FRBuildingGraph` 内多处报告和约束提示也消费该字段，因此下游会看到更明确的人名标识。`menu.py` 的注释清理只影响可读性，不影响飞书任务执行。
+
+### 改动结果与业务影响
+
+- 当前收益主要是“称呼一致性”提升：两个 Graph 对 `user_name` 的构造口径对齐，避免一处显示账号名、另一处显示昵称的语义偏差。
+- 在昵称与账号名不同的场景下，提示词中的指代信息更完整，理论上有助于减少模型把“我/说话人”映射错对象的概率。
+- 这轮变更没有引入新的服务调用或状态字段，整体属于低侵入改动。
+
+### 风险与待办
+
+- 未验证项：本次未看到围绕“昵称缺失/昵称等于账号名/昵称不同于账号名”的自动化回归，建议补最小单测覆盖格式化分支。
+
+### 建议 Commit Message（git-cz）
+
+- `fix(graph): unify user_name format with username and nickname`

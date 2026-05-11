@@ -256,11 +256,12 @@ def nodeLoadFRAndPersona(state: ConversationGraphState) -> dict:
             },
         }
     ]
+    username = user.get("username")
+    nickname = user.get("nickname", username)
     logger.info("nodeLoadFRAndPersona executed finished\n")
     return {
         "round_uuid": round_uuid,
-        "user_name": user.get("username"),
-        "figure_and_relation": fr,
+        "user_name": f"{username}({nickname})" if username != nickname else username,
         "figure_persona": figure_persona,
         "words_to_user": ", ".join(words_to_user),
         "logs": logs,

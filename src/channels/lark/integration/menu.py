@@ -322,7 +322,7 @@ def buildPersonaLark(open_id: str, fr_id: int, text: str) -> None:
             async with getFRBuildingGraph() as graph:
                 res = await graph.ainvoke(init_state)
             end_time = time.perf_counter()
-            # print(res)
+
             logger.info(f"Successfully build persona for {figure_name}")
             sendCard2OpenId(
                 open_id=open_id,

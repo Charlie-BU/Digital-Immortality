@@ -39,7 +39,6 @@ class ConversationGraphState(
     
     request: Request
     user_name: str  # 用户姓名
-    figure_and_relation: dict[str, Any]
     figure_persona: str  # 人物画像
     words_to_user: str  # 非常重要，单独提在 state 顶层
 
