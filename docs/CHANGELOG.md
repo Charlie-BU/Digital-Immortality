@@ -385,3 +385,50 @@
 ### 建议 Commit Message（git-cz）
 
 - `docs(knowledge): create deepwiki`
+
+## CHANGELOG - 2026-05-13 14:37 - 对话链路补上 checkpointer 失效自愈
+
+### 撰写时间
+
+- 2026-05-13 14:37
+
+### Base Commit
+
+- efef4eb1123e09a2da6c5f0bdfd790a7eac0213b
+
+### Compare Scope
+
+- working_tree_only
+
+### 背景与改动目标
+
+- 这次改动的起点是一个明确的稳定性问题：飞书对话链路在执行 `ConversationGraph` 前，会先从 PostgreSQL 读取 LangGraph 的短期记忆 checkpoint；一旦底层异步连接已经被关闭，整轮对话会直接在 `graph.ainvoke()` 之前失败，并向用户回“消息处理失败”。
+- 一开始我没有扩大目标去重写 `checkpointer` 生命周期管理，因为当前问题更适合做一次“最小可恢复”修补。重点是让已知的 `the connection is closed` 场景能自愈，而不是在这轮里重构整条 graph 初始化链路。
+
+### 改动概览
+
+- `src/channels/lark/integration/index.py`：为 `ConversationGraph` 调用增加 `OperationalError` 分支，只在命中 `the connection is closed` 时触发一次重建并重试。
+- `src/agents/graphs/ConversationGraph/graph.py`：新增 `rebuildConversationGraph()`，负责清空缓存 graph、关闭旧异步 `checkpointer`，并重新编译带短期记忆的 `ConversationGraph`。
+- 其它行为保持不变：正常请求仍然走既有的 `getConversationGraph()` 缓存路径，其它异常类型也继续按原逻辑上抛并落到 Lark 失败提示。
+
+### 关键链路解析（含上下游）
+
+- 上游依赖：`ConversationGraph` 的短期记忆依赖 `src/agents/graphs/checkpointer.py` 中的全局异步 `AsyncPostgresSaver`；Lark 消息批处理则通过 `src/channels/lark/integration/index.py` 里的单一后台事件循环提交协程执行。
+- 当前改动：`processMessages()` 在 `graph.ainvoke(...)` 失败且异常满足“连接已关闭”时，先打 warning 日志，再调用 `rebuildConversationGraph()` 重建 graph 与 `checkpointer`，最后只重试一次。
+- 下游影响：用户侧最直接的变化是，数据库连接失效后不再必然立刻失败，而是先尝试一次自愈；但这次改动没有改变 `ConversationGraph` 的输入输出协议，也没有调整 `thread_id`、消息批处理或回复发送逻辑。
+
+### 改动结果与业务影响
+
+- 当前收益是把一个“必现失败”场景收敛成“可恢复一次”的场景。对于 PostgreSQL 短时重连、空闲连接被服务端回收这类问题，Lark 对话链路的韧性会更好。
+- 这次实现刻意保持克制，没有把所有数据库异常都包装成重试。换句话说，只有命中已知的 `the connection is closed` 才会自愈，其它异常仍然保留原始失败语义，避免把真实问题藏掉。
+- 代价是自愈逻辑目前仍是全局级别的 graph 重建。单请求视角下它很直接，但并发视角下还存在边界，需要在风险部分单独说明。
+
+### 风险与待办
+
+- 已知风险：`rebuildConversationGraph()` 会关闭全局异步 `checkpointer` 并重建 graph；如果此时还有其它用户请求正在同一后台事件循环里使用旧 graph，理论上可能被这次全局重建波及，出现并发下的额外失败。
+- 未验证项：当前没有自动化回归去覆盖“首次命中 closed connection 后自动恢复”“并发请求下一个请求重建、另一个请求仍在执行”这两个关键边界，因此现在只能说单链路语义合理，不能说并发行为已经完全收敛。
+- 后续动作：下一步更适合补两类最小验证。一类是针对 `processMessages()` 的失效后单次重试；另一类是针对并发执行中的 graph/checkpointer 重建边界。如果并发风险在实测中成立，再决定是否把重建粒度从“全局 graph”继续下沉。
+
+### 建议 Commit Message（git-cz）
+
+- `fix(lark): rebuild conversation graph on closed checkpoint connection`

@@ -14,7 +14,7 @@ from src.agents.graphs.ConversationGraph.nodes import (
     nodeLoadFRAndPersona,
     nodeRecallFeedsFromDB,
 )
-from src.agents.graphs.checkpointer import agetCheckpointer
+from src.agents.graphs.checkpointer import acloseCheckpointer, agetCheckpointer
 
 logger = logging.getLogger(__name__)
 _conversation_graph_instance: CompiledStateGraph | None = None
@@ -71,3 +71,15 @@ async def getConversationGraph() -> CompiledStateGraph:
         if _conversation_graph_instance is None:
             _conversation_graph_instance = await buildConversationGraphWithMemory()
     return _conversation_graph_instance
+
+
+async def rebuildConversationGraph() -> CompiledStateGraph:
+    """
+    当底层 checkpointer 连接失效时，关闭旧实例并重建图。
+    """
+    global _conversation_graph_instance
+    async with _conversation_graph_lock:
+        _conversation_graph_instance = None
+        await acloseCheckpointer()
+        _conversation_graph_instance = await buildConversationGraphWithMemory()
+        return _conversation_graph_instance
